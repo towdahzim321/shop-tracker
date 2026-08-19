@@ -1,0 +1,2354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Shop Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#1B2A4A;
+    --navy-light:#28395F;
+    --amber:#F2A93B;
+    --amber-dark:#B87A15;
+    --bg:#F4F5F7;
+    --card:#FFFFFF;
+    --border:#E1E4EA;
+    --text:#1A1D26;
+    --text-soft:#5B6072;
+    --text-faint:#9A9FAE;
+    --green:#1D9E75;
+    --green-bg:#E1F5EE;
+    --red:#D8433C;
+    --red-bg:#FBE7E6;
+    --amber-bg:#FDF1DD;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
+    color:var(--text);
+    -webkit-tap-highlight-color:transparent;
+  }
+  #app{
+    max-width:480px;
+    margin:0 auto;
+    min-height:100vh;
+    background:var(--bg);
+    padding-bottom:40px;
+  }
+  .topbar{
+    background:var(--navy);
+    color:#fff;
+    padding:18px 20px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    position:sticky;
+    top:0;
+    z-index:10;
+  }
+  .topbar .title{font-size:17px;font-weight:600;}
+  .topbar .sub{font-size:12px;color:#B9C2D8;margin-top:2px;}
+  .topbar button.back{
+    background:rgba(255,255,255,0.12);
+    border:none;
+    color:#fff;
+    padding:8px 12px;
+    border-radius:10px;
+    font-size:14px;
+    font-weight:500;
+  }
+  .content{padding:20px;}
+  h1{font-size:22px;font-weight:700;margin:0 0 6px;}
+  h2{font-size:17px;font-weight:600;margin:0 0 12px;}
+  p.lead{color:var(--text-soft);font-size:14px;margin:0 0 22px;line-height:1.5;}
+  .btn{
+    display:block;
+    width:100%;
+    padding:18px 16px;
+    border-radius:var(--radius);
+    border:none;
+    font-size:16px;
+    font-weight:600;
+    text-align:left;
+    margin-bottom:12px;
+    cursor:pointer;
+    font-family:inherit;
+  }
+  .btn-primary{background:var(--navy);color:#fff;}
+  .btn-amber{background:var(--amber);color:#3A2400;}
+  .btn-outline{background:#fff;color:var(--navy);border:1.5px solid var(--border);}
+  .btn-full-center{text-align:center;}
+  .btn:active{transform:scale(0.98);}
+  .btn-sub{display:block;font-size:12px;font-weight:400;opacity:0.75;margin-top:3px;}
+  .field{margin-bottom:18px;}
+  .field label{display:block;font-size:13px;font-weight:600;color:var(--text-soft);margin-bottom:7px;}
+  .field input, .field textarea, .field select{
+    width:100%;
+    padding:14px;
+    font-size:17px;
+    border:1.5px solid var(--border);
+    border-radius:10px;
+    font-family:inherit;
+    background:#fff;
+    color:var(--text);
+  }
+  .field textarea{min-height:90px;resize:vertical;}
+  .field input:focus, .field textarea:focus, .field select:focus{outline:none;border-color:var(--navy);}
+  .err{color:var(--red);font-size:13px;margin-top:6px;}
+  .card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:16px;
+    margin-bottom:14px;
+  }
+  .list-item{
+    background:#fff;
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:13px 14px;
+    margin-bottom:9px;
+    cursor:pointer;
+  }
+  .list-item:active{background:var(--bg);}
+  .list-item .model{font-weight:600;font-size:15px;}
+  .list-item .imei{font-size:12px;color:var(--text-faint);margin-top:2px;}
+  .empty{color:var(--text-faint);font-size:14px;text-align:center;padding:30px 10px;}
+  .success-box{
+    background:var(--green-bg);
+    border-radius:var(--radius);
+    padding:26px 18px;
+    text-align:center;
+    margin-bottom:18px;
+  }
+  .success-box .check{font-size:36px;margin-bottom:8px;}
+  .success-box .msg{color:#0E5C46;font-weight:600;font-size:16px;}
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+  .stat{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px;}
+  .stat .label{font-size:12px;color:var(--text-soft);margin-bottom:4px;}
+  .stat .value{font-size:20px;font-weight:700;}
+  .stat.flag-ok .value{color:var(--green);}
+  .stat.flag-bad .value{color:var(--red);}
+  .tabs{display:flex;gap:6px;margin-bottom:16px;overflow-x:auto;padding-bottom:2px;}
+  .tab{
+    flex:0 0 auto;
+    padding:9px 14px;
+    border-radius:20px;
+    background:#fff;
+    border:1.5px solid var(--border);
+    font-size:13px;
+    font-weight:600;
+    color:var(--text-soft);
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .tab.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+  .alert-banner{
+    background:var(--red-bg);
+    color:#8E2B25;
+    padding:12px 14px;
+    border-radius:10px;
+    font-size:13px;
+    font-weight:600;
+    margin-bottom:14px;
+  }
+  .warn-banner{
+    background:var(--amber-bg);
+    color:#7A4E0A;
+    padding:12px 14px;
+    border-radius:10px;
+    font-size:13px;
+    font-weight:600;
+    margin-bottom:14px;
+  }
+  .activity-row{
+    display:flex;
+    justify-content:space-between;
+    padding:10px 0;
+    border-bottom:1px solid var(--border);
+    font-size:13px;
+  }
+  .activity-row:last-child{border-bottom:none;}
+  .activity-row .txt{color:var(--text);}
+  .activity-row .time{color:var(--text-faint);white-space:nowrap;margin-left:10px;}
+  table.stock-table{width:100%;border-collapse:collapse;font-size:13px;}
+  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);}
+  table.stock-table td{padding:8px 4px;border-bottom:1px solid var(--border);}
+  .chip{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;}
+  .chip-green{background:var(--green-bg);color:#0E5C46;}
+  .chip-red{background:var(--red-bg);color:#8E2B25;}
+  .chip-gray{background:#EEF0F3;color:var(--text-soft);}
+  .search-box{margin-bottom:14px;}
+  .keypad-dots{display:flex;justify-content:center;gap:12px;margin:20px 0;}
+  .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--navy);}
+  .dot.filled{background:var(--navy);}
+  .reason-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+  .reason-btn{padding:14px 8px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-size:13px;font-weight:600;text-align:center;cursor:pointer;}
+  .reason-btn.selected{background:var(--navy);color:#fff;border-color:var(--navy);}
+  .link-btn{background:none;border:none;color:var(--navy);font-size:13px;font-weight:600;text-decoration:underline;padding:0;cursor:pointer;font-family:inherit;}
+  .footer-note{text-align:center;color:var(--text-faint);font-size:11px;margin-top:20px;}
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(20,25,40,0.55);
+    display:flex;align-items:center;justify-content:center;padding:22px;z-index:100;
+  }
+  .modal-box{
+    background:#fff;border-radius:16px;padding:22px 20px;max-width:400px;width:100%;
+  }
+  .modal-box .modal-msg{font-size:16px;font-weight:600;line-height:1.45;margin-bottom:18px;}
+  .modal-box .modal-actions{display:flex;gap:10px;}
+  .modal-box .modal-actions button{
+    flex:1;padding:15px 10px;border-radius:12px;border:none;font-size:15px;font-weight:600;
+    font-family:inherit;cursor:pointer;
+  }
+  .modal-box .modal-actions .no{background:#EEF0F3;color:var(--text);}
+  .modal-box .modal-actions .yes{background:var(--red);color:#fff;}
+  .modal-box .modal-actions .yes-safe{background:var(--navy);color:#fff;}
+  .refresh-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
+  .refresh-row .live{font-size:11px;color:var(--text-faint);}
+  .mini-btn{
+    background:#fff;border:1.5px solid var(--border);border-radius:20px;padding:7px 14px;
+    font-size:13px;font-weight:600;color:var(--navy);font-family:inherit;cursor:pointer;
+  }
+  .sheet-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
+  .sheet-head .biz{font-size:17px;font-weight:700;letter-spacing:0.5px;}
+  .sheet-head .meta{font-size:12px;color:var(--text-soft);margin-top:2px;}
+  table.sheet-table{width:100%;border-collapse:collapse;font-size:12px;}
+  table.sheet-table th{
+    text-align:left;font-weight:700;padding:7px 5px;border:1px solid var(--border);
+    background:#F0F2F6;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;
+  }
+  table.sheet-table td{padding:8px 5px;border:1px solid var(--border);vertical-align:top;}
+  table.sheet-table td.num{text-align:center;font-weight:600;}
+  table.sheet-table tr.total-row td{background:#F0F2F6;font-weight:700;}
+  table.sheet-table .note{font-size:10px;color:var(--text-soft);display:block;}
+  .sign-row{display:flex;gap:24px;margin-top:26px;}
+  .sign-row .sign{flex:1;border-top:1px solid var(--text-faint);padding-top:5px;font-size:11px;color:var(--text-soft);}
+  @media print{
+    body{background:#fff;}
+    #app{max-width:none;margin:0;padding:0;background:#fff;}
+    .content{padding:0;}
+    .no-print{display:none !important;}
+    table.sheet-table{font-size:10.5px;}
+    table.sheet-table th{background:#EEE !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    table.sheet-table tr.total-row td{background:#EEE !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    table.sheet-table tr{page-break-inside:avoid;}
+    table.sheet-table td{height:26px;}
+    @page{size:A4 portrait;margin:12mm;}
+  }
+  .section-flag{
+    background:var(--amber-bg);color:#7A4E0A;border-radius:10px;padding:11px 13px;
+    font-size:13px;font-weight:600;margin-bottom:12px;
+  }
+  .pickup-wrap{margin-bottom:20px;}
+  .pickup-heading{
+    font-size:12px;font-weight:700;color:var(--amber-dark);text-transform:uppercase;
+    letter-spacing:0.5px;margin-bottom:8px;
+  }
+  .pickup-item{
+    background:var(--amber-bg);border:1px solid #EBCE95;border-left:4px solid var(--amber);
+  }
+  .pickup-item .model{color:#3A2400;}
+  .pickup-item .imei{color:#7A4E0A;}
+  .local-mode-banner{
+    background:var(--red);color:#fff;text-align:center;font-size:12.5px;font-weight:600;
+    padding:10px 16px;line-height:1.4;
+  }
+  .save-toast{
+    position:fixed;left:12px;right:12px;bottom:14px;z-index:200;max-width:456px;margin:0 auto;
+  }
+  .save-toast .box{
+    background:var(--red);color:#fff;border-radius:12px;padding:13px 14px;font-size:13px;
+    font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,0.3);display:flex;justify-content:space-between;
+    align-items:center;gap:10px;
+  }
+  .save-toast button{
+    background:rgba(255,255,255,0.18);border:none;color:#fff;padding:6px 10px;border-radius:8px;
+    font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;flex:0 0 auto;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const SHOPS = [
+  {id:'harare', name:'Harare CBD'},
+  {id:'bulawayo1', name:'Bulawayo Shop 1'},
+  {id:'bulawayo2', name:'Bulawayo Shop 2'}
+];
+const DEFAULT_PINS = {harare:'1234', bulawayo1:'2345', bulawayo2:'3456'};
+const DEFAULT_ADMIN = {username:'owner', password:'towdah9999'};
+const DEFAULT_LOW_STOCK = 3;
+const AGED_FAULTY_DAYS = 3;
+const UNCONFIRMED_CASH_LOOKBACK_DAYS = 7;
+const RETURN_REASONS = ['Faulty','Wrong item','Changed mind','Other'];
+const FAULT_PARTS = ['Screen/LCD','Battery','Camera','Charging port','Speaker/Mic','Network/Signal','Buttons','Back cover/glass','Software','Water damage','Other'];
+const COMMON_MODELS = ['Samsung A15','Samsung A25','Samsung A55','Samsung S23','Samsung S24','iPhone 11','iPhone 12','iPhone 13','iPhone 14','iPhone 15'];
+
+let CONFIG = null;
+let SHOP_CACHE = {};
+
+let S = { view:'home' };
+
+function shopName(id){ const s = SHOPS.find(x=>x.id===id); return s ? s.name : id; }
+function pad2(n){ return String(n).padStart(2,'0'); }
+function dateStr(d){ const x = d || new Date(); return x.getFullYear()+'-'+pad2(x.getMonth()+1)+'-'+pad2(x.getDate()); }
+function todayStr(){ return dateStr(new Date()); }
+function tsDate(ts){ return dateStr(new Date(ts)); }
+function daysAgoStr(n){ const d = new Date(); d.setDate(d.getDate()-n); return dateStr(d); }
+function nowLabel(){ return new Date().toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }
+function money(n){ if(n===null||n===undefined||isNaN(n)) return '-'; return '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2}); }
+function genId(){ return 'p' + Date.now() + Math.random().toString(36).slice(2,7); }
+function genBatchId(){ return 'b' + Date.now() + Math.random().toString(36).slice(2,7); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// STORAGE_MODE tracks whether we're actually on the shared link ('shared') or
+// had to fall back to this single device's own storage ('local'). render()
+// shows an unmissable banner whenever we're in 'local' mode.
+let STORAGE_MODE = 'shared';
+const LOCAL_PREFIX = 'shoptracker_local_';
+function hasSharedStorage(){
+  return typeof window !== 'undefined' && !!window.storage
+    && typeof window.storage.get === 'function' && typeof window.storage.set === 'function';
+}
+function localGet(key){
+  try{ return localStorage.getItem(LOCAL_PREFIX + key); }catch(e){ return null; }
+}
+function localSet(key, val){
+  try{ localStorage.setItem(LOCAL_PREFIX + key, val); return true; }catch(e){ return false; }
+}
+async function sget(key){
+  if(hasSharedStorage()){
+    try{
+      const r = await window.storage.get(key, true);
+      STORAGE_MODE = 'shared';
+      if(r === null || r === undefined) return null;
+      if(typeof r === 'string') return r;
+      if(typeof r.value === 'string') return r.value;
+      if(r.value === null || r.value === undefined) return null;
+      return String(r.value);
+    }catch(e){
+      STORAGE_MODE = 'local';
+      return localGet(key);
+    }
+  }
+  STORAGE_MODE = 'local';
+  return localGet(key);
+}
+async function sset(key, val){
+  if(hasSharedStorage()){
+    try{
+      await window.storage.set(key, val, true);
+      STORAGE_MODE = 'shared';
+      return true;
+    }catch(e){
+      STORAGE_MODE = 'local';
+      if(!localSet(key, val)) throw new Error('save-failed');
+      return true;
+    }
+  }
+  STORAGE_MODE = 'local';
+  if(!localSet(key, val)) throw new Error('save-failed');
+  return true;
+}
+
+async function loadConfig(){
+  try{
+    const raw = await sget('app_config');
+    CONFIG = JSON.parse(raw);
+    let changed = false;
+    if(!CONFIG.admin){ CONFIG.admin = {...DEFAULT_ADMIN}; changed = true; }
+    if(!CONFIG.lowStockThreshold && CONFIG.lowStockThreshold !== 0){ CONFIG.lowStockThreshold = DEFAULT_LOW_STOCK; changed = true; }
+    if(!CONFIG.pins){ CONFIG.pins = {...DEFAULT_PINS}; changed = true; }
+    if(changed) await saveConfig();
+  }catch(e){
+    CONFIG = { pins: {...DEFAULT_PINS}, admin: {...DEFAULT_ADMIN}, lowStockThreshold: DEFAULT_LOW_STOCK };
+    try{ await sset('app_config', JSON.stringify(CONFIG)); }catch(e2){ /* keep going with in-memory config so the app still opens */ }
+  }
+}
+async function saveConfig(){
+  await sset('app_config', JSON.stringify(CONFIG));
+}
+function emptyShopData(){ return { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [], draftReceiving: null }; }
+function normalizeShop(d){
+  if(!d.inventory) d.inventory = [];
+  if(!d.dailyLogs) d.dailyLogs = [];
+  if(!d.activity) d.activity = [];
+  if(!d.businessDays) d.businessDays = [];
+  if(!d.ledger) d.ledger = [];
+  if(d.draftReceiving === undefined) d.draftReceiving = null;
+  return d;
+}
+function pushLedger(data, entry){
+  if(!data.ledger) data.ledger = [];
+  data.ledger.push(Object.assign({lid: genId(), ts: Date.now()}, entry));
+  if(data.ledger.length > 4000) data.ledger = data.ledger.slice(-4000);
+}
+function getBizDay(data, date){ return (data.businessDays||[]).find(b=>b.date===date); }
+function isDayOpen(data, date){ const b = getBizDay(data,date); return !!b && b.status==='open'; }
+function bizDayBanner(data, shopId, date){
+  const b = getBizDay(data, date);
+  if(b && b.status==='open'){
+    return `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">Business day ${esc(date)} is open (opened by ${esc(b.openedBy)}).</div>`;
+  }
+  if(b && b.status==='closed'){
+    return `<div class="alert-banner">Business day ${esc(date)} is closed (closed by ${esc(b.closedBy||'-')}). <button class="link-btn" style="color:inherit;" onclick="openBizDayAction('${shopId}','${date}')">Reopen today</button></div>`;
+  }
+  return `<div class="alert-banner">Business day ${esc(date)} is not open. Staff cannot log entries until you open it. <button class="link-btn" style="color:inherit;" onclick="openBizDayAction('${shopId}','${date}')">Open today</button></div>`;
+}
+function reopenDay(data, date, who){
+  if(!data.businessDays) data.businessDays = [];
+  let b = getBizDay(data, date);
+  const wasClosed = !!(b && b.status === 'closed');
+  const eodExists = !!data.dailyLogs.find(l=>l.date===date);
+  if(!b){ b = {date, status:'open', openedBy:who, openedAt:Date.now(), closedBy:null, closedAt:null}; data.businessDays.push(b); }
+  else { b.status='open'; b.openedBy=who; b.openedAt=Date.now(); b.closedBy=null; b.closedAt=null; }
+  if(wasClosed && eodExists){
+    b.reopenCount = (b.reopenCount||0) + 1;
+    b.lastReopenBy = who;
+    b.lastReopenAt = Date.now();
+    pushLedger(data, {type:'reopen', by:who, note:'Day '+date+' reopened after end of day was submitted'});
+  }
+  pushActivity(null, 'edit', '', data, 'Business day '+date+' '+(wasClosed?'REOPENED':'opened')+' by '+who+((wasClosed&&eodExists)?' (after end of day was already submitted)':''));
+  return b;
+}
+async function openBizDayAction(shopId, date){
+  const admin = (CONFIG.admin && CONFIG.admin.username) || 'admin';
+  await mutateShop(shopId, data => reopenDay(data, date, admin));
+  render();
+}
+async function loadShopData(shopId){
+  if(SHOP_CACHE[shopId]) return SHOP_CACHE[shopId];
+  return refreshShopData(shopId);
+}
+async function refreshShopData(shopId){
+  try{
+    const raw = await sget('shop_data_' + shopId);
+    if(raw){ SHOP_CACHE[shopId] = normalizeShop(JSON.parse(raw)); }
+    else if(!SHOP_CACHE[shopId]){ SHOP_CACHE[shopId] = emptyShopData(); }
+  }catch(e){
+    if(!SHOP_CACHE[shopId]) SHOP_CACHE[shopId] = emptyShopData();
+  }
+  return SHOP_CACHE[shopId];
+}
+async function saveShopData(shopId){
+  await sset('shop_data_' + shopId, JSON.stringify(SHOP_CACHE[shopId]));
+}
+// Pulls the newest copy from shared storage immediately before applying a change,
+// so two phones saving at nearly the same moment do not wipe each other's entries.
+let MUTATE_QUEUE = Promise.resolve();
+function mutateShop(shopId, fn){
+  const run = async ()=>{
+    try{
+      const data = await refreshShopData(shopId);
+      const result = fn(data);
+      await saveShopData(shopId);
+      return result;
+    }catch(e){
+      showSaveError("That didn't save. Please try again — if this keeps happening, tell the owner.");
+      throw e;
+    }
+  };
+  MUTATE_QUEUE = MUTATE_QUEUE.then(run, run);
+  return MUTATE_QUEUE;
+}
+// Shown when a save genuinely fails (both shared and local storage unavailable).
+// Never shown together with a success screen - callers stop (the promise
+// rejects) before they reach any "Saved!" message.
+function showSaveError(msg){
+  const existing = document.querySelector('.save-toast');
+  if(existing) existing.remove();
+  const el = document.createElement('div');
+  el.className = 'save-toast';
+  el.innerHTML = `<div class="box"><span>${esc(msg)}</span><button onclick="this.closest('.save-toast').remove()">Dismiss</button></div>`;
+  document.body.appendChild(el);
+}
+function pushActivity(shopId, type, text, dataObj, altText){
+  const d = dataObj || SHOP_CACHE[shopId];
+  if(!d) return;
+  if(!d.activity) d.activity = [];
+  d.activity.unshift({ts: Date.now(), type, text: (altText !== undefined ? altText : text)});
+  if(d.activity.length > 200) d.activity = d.activity.slice(0,200);
+}
+
+// In-app confirmation. Native confirm() can be blocked inside embedded frames,
+// which would silently turn admin corrections into no-ops.
+let MODAL_RESOLVE = null;
+function askConfirm(msg, yesLabel, danger){
+  return new Promise(resolve=>{
+    MODAL_RESOLVE = resolve;
+    const el = document.createElement('div');
+    el.className = 'modal-overlay';
+    el.id = 'modalOverlay';
+    el.innerHTML = `<div class="modal-box">
+      <div class="modal-msg">${esc(msg)}</div>
+      <div class="modal-actions">
+        <button class="no" onclick="closeModal(false)">Cancel</button>
+        <button class="${danger===false?'yes-safe':'yes'}" onclick="closeModal(true)">${esc(yesLabel||'Yes, do it')}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(el);
+  });
+}
+function closeModal(val){
+  const el = document.getElementById('modalOverlay');
+  if(el) el.remove();
+  const r = MODAL_RESOLVE; MODAL_RESOLVE = null;
+  if(r) r(val);
+}
+
+// Live refresh: shared data can change on another phone at any moment.
+const LIVE_VIEWS = ['ownerDash','staffDash','staffMenu','ownerTransactions','ownerDayReport','ownerManage','ownerCashDetail','ownerFaulty'];
+let POLL_TIMER = null;
+let LAST_SYNC = null;
+function startPolling(){
+  if(POLL_TIMER) return;
+  POLL_TIMER = setInterval(()=>{ pollTick(); }, 15000);
+}
+async function pollTick(force){
+  if(!force){
+    if(LIVE_VIEWS.indexOf(S.view) === -1) return;
+    if(document.getElementById('modalOverlay')) return;
+    const ae = document.activeElement;
+    if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName) >= 0) return;
+  }
+  const ids = (S.view.indexOf('owner')===0) ? SHOPS.map(x=>x.id) : (S.shopId ? [S.shopId] : []);
+  let changed = false;
+  for(const id of ids){
+    const before = JSON.stringify(SHOP_CACHE[id] || null);
+    await refreshShopData(id);
+    if(JSON.stringify(SHOP_CACHE[id]) !== before) changed = true;
+  }
+  LAST_SYNC = new Date();
+  if(changed || force) render();
+}
+function syncLabel(){
+  return LAST_SYNC ? 'Updated ' + LAST_SYNC.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : 'Live';
+}
+// Renders the "Pick up where you left off" section. Returns '' when there is
+// nothing unfinished, so it never shows an empty "all done" state.
+function renderPickupSection(cards){
+  if(!cards || cards.length===0) return '';
+  return `<div class="pickup-wrap">
+    <div class="pickup-heading">Pick up where you left off</div>
+    ${cards.map(c=>`
+      <div class="list-item pickup-item" onclick="${c.onclick}">
+        <div class="model">${esc(c.title)}</div>
+        <div class="imei">${esc(c.sub)}</div>
+      </div>`).join('')}
+  </div>`;
+}
+function timeOfDay(ts){ return ts ? new Date(ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : '-'; }
+function daysSince(ts){ return Math.floor((Date.now()-ts)/86400000); }
+function refreshRow(){
+  return `<div class="refresh-row">
+    <span class="live">&#9679; ${esc(syncLabel())} &middot; refreshes automatically</span>
+    <button class="mini-btn" onclick="pollTick(true)">Refresh now</button>
+  </div>`;
+}
+
+function render(){
+  const app = document.getElementById('app');
+  app.innerHTML = (STORAGE_MODE==='local' ? localModeBanner() : '') + viewFor(S.view);
+}
+function localModeBanner(){
+  return `<div class="local-mode-banner">&#9888; Not connected to the shared shop data. Entries here only save on THIS device - ask the owner for the correct link.</div>`;
+}
+function setView(v, extra){ S = Object.assign({view:v}, extra||{}, S.keep ? {keep:S.keep} : {}); render(); }
+function go(v, extra){
+  const keep = {};
+  ['shopId','staffName'].forEach(k=>{ if(S[k]!==undefined) keep[k]=S[k]; });
+  S = Object.assign({view:v}, keep, extra||{});
+  render();
+}
+
+function topbar(title, sub, backView, backExtra){
+  return `<div class="topbar">
+    <div>
+      <div class="title">${esc(title)}</div>
+      ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
+    </div>
+    ${backView ? `<button class="back" onclick='navBack()'>Back</button>` : ''}
+  </div>`;
+}
+let BACK_STACK = [];
+function navTo(view, extra){
+  BACK_STACK.push(JSON.stringify(S));
+  go(view, extra);
+}
+function navBack(){
+  if(BACK_STACK.length===0){ go('home'); return; }
+  const prev = JSON.parse(BACK_STACK.pop());
+  S = prev;
+  render();
+}
+function navHome(){ BACK_STACK=[]; go('home'); }
+
+function viewFor(v){
+  switch(v){
+    case 'home': return screenHome();
+    case 'staffShop': return screenStaffShop();
+    case 'staffPin': return screenStaffPin();
+    case 'staffName': return screenStaffName();
+    case 'staffMenu': return screenStaffMenu();
+    case 'staffDash': return screenStaffDash();
+    case 'sale': return screenSale();
+    case 'salePrice': return screenSalePrice();
+    case 'return': return screenReturn();
+    case 'returnReason': return screenReturnReason();
+    case 'receive': return screenReceive();
+    case 'eod': return screenEod();
+    case 'adminLogin': return screenAdminLogin();
+    case 'ownerDash': return screenOwnerDash();
+    case 'ownerSettings': return screenOwnerSettings();
+    case 'ownerManage': return screenOwnerManage();
+    case 'ownerPricing': return screenOwnerPricing();
+    case 'ownerDayReport': return screenOwnerDayReport();
+    case 'ownerTransactions': return screenOwnerTransactions();
+    case 'ownerCashDetail': return screenOwnerCashDetail();
+    case 'ownerFaulty': return screenOwnerFaulty();
+    case 'stockSheet': return screenStockSheet();
+    default: return screenHome();
+  }
+}
+
+function screenHome(){
+  return `
+  <div class="topbar">
+    <div>
+      <div class="title">Shop Tracker</div>
+      <div class="sub">Samsung &amp; iPhone shops</div>
+    </div>
+  </div>
+  <div class="content">
+    <h1>Welcome</h1>
+    <p class="lead">Choose how you'd like to use the app.</p>
+    <button class="btn btn-primary" onclick="navTo('staffShop')">
+      Staff entry
+      <span class="btn-sub">Log sales, returns, stock received and end of day count</span>
+    </button>
+    <button class="btn btn-outline" onclick="navTo('adminLogin')">
+      Admin dashboard
+      <span class="btn-sub">Log in to see reports, stock and money across all shops</span>
+    </button>
+    <div class="footer-note">Enter through this link at your shop's set time each day.</div>
+  </div>`;
+}
+
+function screenStaffShop(){
+  return `
+  ${topbar('Staff entry','Select your shop', true)}
+  <div class="content">
+    ${SHOPS.map(s=>`<button class="btn btn-outline" onclick="navTo('staffPin',{shopId:'${s.id}'})">${esc(s.name)}</button>`).join('')}
+  </div>`;
+}
+
+function screenStaffPin(){
+  return `
+  ${topbar(shopName(S.shopId), 'Enter shop code', true)}
+  <div class="content">
+    <div class="field">
+      <label>4-digit shop code</label>
+      <input type="tel" inputmode="numeric" id="pinInput" maxlength="4" placeholder="- - - -" style="letter-spacing:8px;font-size:24px;text-align:center;" autofocus>
+    </div>
+    <div id="pinErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitShopPin()">Continue</button>
+  </div>`;
+}
+async function submitShopPin(){
+  const val = document.getElementById('pinInput').value.trim();
+  const correct = (CONFIG.pins[S.shopId] || DEFAULT_PINS[S.shopId]);
+  if(val === correct){
+    await loadShopData(S.shopId);
+    if(S.staffName){ navTo('staffMenu'); }
+    else { navTo('staffName'); }
+  } else {
+    document.getElementById('pinErr').innerHTML = '<div class="err">That code is not correct. Ask your manager for the shop code.</div>';
+  }
+}
+
+function screenStaffName(){
+  return `
+  ${topbar(shopName(S.shopId), 'Who is entering today?', true)}
+  <div class="content">
+    <div class="field">
+      <label>Your name</label>
+      <input type="text" id="nameInput" placeholder="e.g. Tendai">
+    </div>
+    <div id="nameErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitStaffName()">Continue</button>
+  </div>`;
+}
+function submitStaffName(){
+  const val = document.getElementById('nameInput').value.trim();
+  if(!val){ document.getElementById('nameErr').innerHTML = '<div class="err">Enter your name to continue.</div>'; return; }
+  S.staffName = val;
+  navTo('staffMenu');
+}
+
+// Unfinished tasks this shop's staff can jump straight back into.
+function staffPickupCards(data, shopId){
+  const cards = [];
+  const today = todayStr();
+  const bd = getBizDay(data, today);
+  const dayOpen = isDayOpen(data, today);
+  const eodDone = !!data.dailyLogs.find(l=>l.date===today);
+  if(dayOpen && !eodDone){
+    cards.push({
+      title: 'Finish end of day',
+      sub: 'Day opened by '+(bd?bd.openedBy:'-')+' at '+(bd?timeOfDay(bd.openedAt):'-')+'. Count phones and cash to close out today.',
+      onclick: "navTo('eod')"
+    });
+  }
+  const draft = data.draftReceiving;
+  if(draft && draft.lines && draft.lines.length){
+    const totalPcs = draft.lines.reduce((a,l)=>a+l.qty,0);
+    cards.push({
+      title: 'Finish receiving stock',
+      sub: totalPcs+' phone(s) across '+draft.lines.length+' item(s) added by '+(draft.startedBy||'-')+', not saved to stock yet.',
+      onclick: "navTo('receive')"
+    });
+  }
+  return cards;
+}
+function screenStaffMenu(){
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  const today = todayStr();
+  const bizDay = getBizDay(data, today);
+  const dayOpen = isDayOpen(data, today);
+  const eodDone = !!data.dailyLogs.find(l=>l.date===today);
+  let statusBanner = '';
+  let actionButtons = '';
+  if(!dayOpen){
+    statusBanner = bizDay && bizDay.status==='closed'
+      ? `<div class="warn-banner">Today's business day (${esc(today)}) is closed.</div>`
+      : `<div class="warn-banner">Today's business day (${esc(today)}) is not open yet.</div>`;
+    actionButtons = `<button class="btn btn-primary btn-full-center" onclick="openBizDayStaffAction()">Open today's business day</button>`;
+  } else {
+    statusBanner = `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">Today's business day (${esc(today)}) is open.</div>`;
+    actionButtons = `
+    <button class="btn btn-primary" onclick="navTo('sale')">Sold a phone</button>
+    <button class="btn btn-primary" onclick="navTo('return')">Client return</button>
+    <button class="btn btn-primary" onclick="navTo('receive')">Received new stock</button>
+    <button class="btn btn-amber" onclick="navTo('eod')">End of day: count &amp; cash</button>
+    ${eodDone ? `<button class="btn btn-outline" style="border-color:var(--red);color:var(--red);" onclick="closeBizDayAction()">Close business day</button>` : `<div style="font-size:12px;color:var(--text-faint);text-align:center;margin-bottom:12px;">Submit end of day before you can close the business day.</div>`}
+    `;
+  }
+  const inStockCount = data.inventory.filter(p=>p.status==='in_stock').length;
+  const faultyCount = data.inventory.filter(p=>p.status==='faulty').length;
+  return `
+  ${topbar(shopName(S.shopId), 'Signed in as ' + S.staffName, true)}
+  <div class="content">
+    ${renderPickupSection(staffPickupCards(data, S.shopId))}
+    ${statusBanner}
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Phones in stock</div><div class="value">${inStockCount}</div></div>
+      <div class="stat"><div class="label">On faulty shelf</div><div class="value">${faultyCount}</div></div>
+    </div>
+    ${faultyCount>0 ? `<div class="section-flag">${faultyCount} faulty phone(s) are on the faulty shelf. Do not sell them. Count them separately at end of day.</div>` : ''}
+    <button class="btn btn-outline" onclick="navTo('staffDash')">Shop dashboard</button>
+    <button class="btn btn-outline" onclick="navTo('stockSheet',{sheetShop:S.shopId,sheetDate:todayStr(),sheetAdmin:false})">Daily stock sheet (print)</button>
+    ${actionButtons}
+    <div style="margin-top:18px;text-align:center;">
+      <button class="link-btn" onclick="S.staffName=null;navTo('staffName')">Not ${esc(S.staffName)}? Change name</button>
+    </div>
+  </div>`;
+}
+async function closeBizDayAction(){
+  const ok = await askConfirm("Close today's business day? You will not be able to add more entries for today unless the day is opened again.", 'Yes, close the day', false);
+  if(!ok) return;
+  const date = todayStr();
+  const who = S.staffName;
+  await mutateShop(S.shopId, data => {
+    const b = getBizDay(data, date);
+    if(!b) return;
+    b.status = 'closed';
+    b.closedBy = who;
+    b.closedAt = Date.now();
+    b.closingStock = data.inventory.filter(p=>p.status==='in_stock').length;
+    b.closingFaulty = data.inventory.filter(p=>p.status==='faulty').length;
+    pushActivity(null, 'eod', '', data, who+' closed business day '+date+' ('+b.closingStock+' in stock, '+b.closingFaulty+' faulty)');
+  });
+  render();
+}
+async function openBizDayStaffAction(){
+  const date = todayStr();
+  const who = S.staffName || 'staff';
+  await mutateShop(S.shopId, data => reopenDay(data, date, who));
+  render();
+}
+function screenStaffDash(){
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
+  const inStock = data.inventory.filter(p=>p.status==='in_stock');
+  const byModel = {};
+  inStock.forEach(p=>{
+    const key = p.model + (p.description ? ' - ' + p.description : '');
+    byModel[key] = (byModel[key]||0) + 1;
+  });
+  const stockKeys = Object.keys(byModel).sort();
+  const stockRows = stockKeys.map(k=>`
+    <tr><td>${esc(k)}</td><td>${byModel[k]}</td><td>${byModel[k]<=threshold ? '<span class="chip chip-red">Re-up needed</span>' : '<span class="chip chip-green">OK</span>'}</td></tr>
+  `).join('');
+  const lowCount = stockKeys.filter(k=>byModel[k]<=threshold).length;
+
+  const faultyList = data.inventory.filter(p=>p.status==='faulty').sort((a,b)=>(b.returnedTs||0)-(a.returnedTs||0));
+  const recentSales = data.inventory.filter(p=>p.status==='sold').sort((a,b)=>(b.dateSold||'').localeCompare(a.dateSold||'')).slice(0,10);
+  const recentReturns = data.inventory.filter(p=>p.dateReturned).sort((a,b)=>(b.dateReturned||'').localeCompare(a.dateReturned||'')).slice(0,10);
+  const recentReceiving = data.activity.filter(a=>a.type==='receive').slice(0,10);
+
+  return `
+  ${topbar(shopName(S.shopId), 'Shop dashboard', true)}
+  <div class="content">
+    ${refreshRow()}
+    ${lowCount>0 ? `<div class="warn-banner">${lowCount} model(s) are running low and may need a re-up.</div>` : ''}
+    ${faultyList.length>0 ? `<div class="section-flag">${faultyList.length} phone(s) on the faulty shelf - not for sale.</div>` : ''}
+    <h2>Stock levels</h2>
+    <div class="card">
+      ${stockRows ? `<table class="stock-table"><tr><th>Model</th><th>Qty</th><th>Status</th></tr>${stockRows}</table>` : '<div class="empty">No stock recorded.</div>'}
+    </div>
+
+    <h2>Faulty shelf</h2>
+    <div class="card">
+      ${faultyList.length===0 ? '<div class="empty">Nothing on the faulty shelf.</div>' : faultyList.map(p=>`
+        <div class="activity-row"><div class="txt">${esc(p.model)}${p.description?' - '+esc(p.description):''}<div class="imei">IMEI: ${esc(p.imei)}${p.faultParts&&p.faultParts.length?' &middot; '+esc(p.faultParts.join(', ')):''}</div></div><div class="time">${esc(p.dateReturned||'')}</div></div>
+      `).join('')}
+    </div>
+
+    <h2>Recent sales</h2>
+    <div class="card">
+      ${recentSales.length===0 ? '<div class="empty">No sales yet.</div>' : recentSales.map(p=>`
+        <div class="activity-row"><div class="txt">${esc(p.model)}${p.description?' - '+esc(p.description):''} &middot; ${money(p.salePrice)}</div><div class="time">${esc(p.dateSold)}</div></div>
+      `).join('')}
+    </div>
+
+    <h2>Recent returns</h2>
+    <div class="card">
+      ${recentReturns.length===0 ? '<div class="empty">No returns yet.</div>' : recentReturns.map(p=>`
+        <div class="activity-row"><div class="txt">${esc(p.model)} &middot; ${esc(p.returnReason||'')}</div><div class="time">${esc(p.dateReturned)}</div></div>
+      `).join('')}
+    </div>
+
+    <h2>Stock receiving updates</h2>
+    <div class="card">
+      ${recentReceiving.length===0 ? '<div class="empty">No stock received yet.</div>' : recentReceiving.map(a=>`
+        <div class="activity-row"><div class="txt">${esc(a.text)}</div><div class="time">${new Date(a.ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div></div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+
+let selectedPhone = null;
+function dayNotOpenScreen(){
+  return `
+  ${topbar(shopName(S.shopId), 'Business day not open', true)}
+  <div class="content">
+    <div class="warn-banner">Today's business day isn't open yet.</div>
+    <button class="btn btn-primary btn-full-center" onclick="openBizDayStaffAction()">Open today's business day</button>
+    <button class="btn btn-outline btn-full-center" onclick="navTo('staffMenu')">Back to menu</button>
+  </div>`;
+}
+function requireOpenDay(){
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  return isDayOpen(data, todayStr());
+}
+function screenSale(){
+  if(!requireOpenDay()) return dayNotOpenScreen();
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  const inStock = data.inventory.filter(p=>p.status==='in_stock');
+  setTimeout(()=>attachSearchFilter('saleSearch','saleList'),0);
+  return `
+  ${topbar(shopName(S.shopId), 'Sold a phone', true)}
+  <div class="content">
+    <div class="search-box field">
+      <label>Search by model or IMEI</label>
+      <input type="text" id="saleSearch" placeholder="e.g. A15 or last 4 digits">
+    </div>
+    <div id="saleList">
+      ${renderPhoneList(inStock, 'pickSalePhone')}
+    </div>
+  </div>`;
+}
+function renderPhoneList(list, handlerName){
+  if(list.length===0) return `<div class="empty">No phones found. Try a different search, or check "Received new stock" first.</div>`;
+  return list.map(p=>`
+    <div class="list-item" data-model="${esc(p.model.toLowerCase())}" data-imei="${esc(p.imei.toLowerCase())}" onclick="${handlerName}('${p.id}')">
+      <div class="model">${esc(p.model)}${p.description ? ' - '+esc(p.description) : ''}</div>
+      <div class="imei">IMEI: ${esc(p.imei)}</div>
+    </div>`).join('');
+}
+function attachSearchFilter(inputId, listId){
+  const input = document.getElementById(inputId);
+  if(!input) return;
+  input.addEventListener('input', ()=>{
+    const q = input.value.trim().toLowerCase();
+    const items = document.querySelectorAll('#'+listId+' .list-item');
+    items.forEach(it=>{
+      const m = it.getAttribute('data-model')||'';
+      const im = it.getAttribute('data-imei')||'';
+      it.style.display = (m.includes(q) || im.includes(q)) ? '' : 'none';
+    });
+  });
+}
+function pickSalePhone(phoneId){
+  const data = SHOP_CACHE[S.shopId];
+  selectedPhone = data.inventory.find(p=>p.id===phoneId);
+  navTo('salePrice');
+}
+function screenSalePrice(){
+  if(!selectedPhone) return screenHome();
+  return `
+  ${topbar(shopName(S.shopId), 'Confirm sale', true)}
+  <div class="content">
+    <div class="card">
+      <div class="model" style="font-size:17px;font-weight:700;">${esc(selectedPhone.model)}${selectedPhone.description ? ' - '+esc(selectedPhone.description) : ''}</div>
+      <div class="imei">IMEI: ${esc(selectedPhone.imei)}</div>
+      ${selectedPhone.listPrice ? `<div class="imei">Zim price: ${money(selectedPhone.listPrice)}</div>` : ''}
+    </div>
+    <div class="field">
+      <label>Sale price ($)</label>
+      <input type="tel" inputmode="decimal" id="priceInput" placeholder="e.g. 180" value="${selectedPhone.listPrice||''}">
+    </div>
+    <div id="priceErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="confirmSale()">Confirm sale</button>
+  </div>`;
+}
+async function confirmSale(){
+  const val = document.getElementById('priceInput').value.trim();
+  const num = parseFloat(val);
+  if(!val || isNaN(num) || num<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter a valid sale price.</div>'; return; }
+  const phoneId = selectedPhone.id;
+  const who = S.staffName;
+  const res = await mutateShop(S.shopId, data => {
+    const p = data.inventory.find(x=>x.id===phoneId);
+    if(!p) return {error:'This phone is no longer on the system. Ask the owner to check.'};
+    if(p.status !== 'in_stock') return {error:'This phone is no longer available for sale. Go back and pick it from the list again.'};
+    p.status = 'sold';
+    p.salePrice = num;
+    p.soldBy = who;
+    p.dateSold = todayStr();
+    p.soldTs = Date.now();
+    const list = p.listPrice;
+    if(list && num < list){ p.belowPrice = true; p.priceShortfall = Math.round((list - num)*100)/100; }
+    else { p.belowPrice = false; p.priceShortfall = 0; }
+    pushLedger(data, {type:'sold', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, price:num, by:who, belowPrice:!!p.belowPrice, shortfall:p.priceShortfall||0});
+    pushActivity(null, 'sale', '', data, who+' sold '+p.model+' ('+p.imei+') for '+money(num));
+    return {ok:true};
+  });
+  if(res && res.error){
+    document.getElementById('priceErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+    return;
+  }
+  selectedPhone = null;
+  showSuccessThen('Sale recorded.', 'staffMenu');
+}
+
+function screenReturn(){
+  if(!requireOpenDay()) return dayNotOpenScreen();
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  const sold = data.inventory.filter(p=>p.status==='sold').sort((a,b)=> (b.dateSold||'').localeCompare(a.dateSold||''));
+  setTimeout(()=>attachSearchFilter('returnSearch','returnList'),0);
+  return `
+  ${topbar(shopName(S.shopId), 'Client return', true)}
+  <div class="content">
+    <div class="search-box field">
+      <label>Search by model or IMEI</label>
+      <input type="text" id="returnSearch" placeholder="e.g. A15 or last 4 digits">
+    </div>
+    <div id="returnList">
+      ${renderPhoneList(sold, 'pickReturnPhone')}
+    </div>
+  </div>`;
+}
+function pickReturnPhone(phoneId){
+  const data = SHOP_CACHE[S.shopId];
+  selectedPhone = data.inventory.find(p=>p.id===phoneId);
+  S.returnReason = null;
+  S.returnFaultParts = null;
+  S.returnNotes = null;
+  navTo('returnReason');
+}
+function screenReturnReason(){
+  if(!selectedPhone) return screenHome();
+  return `
+  ${topbar(shopName(S.shopId), 'Reason for return', true)}
+  <div class="content">
+    <div class="card">
+      <div style="font-size:17px;font-weight:700;">${esc(selectedPhone.model)}</div>
+      <div class="imei">IMEI: ${esc(selectedPhone.imei)} &middot; sold for ${money(selectedPhone.salePrice)}</div>
+    </div>
+    <div class="reason-grid" id="reasonGrid">
+      ${RETURN_REASONS.map(r=>`<div class="reason-btn ${S.returnReason===r?'selected':''}" data-r="${esc(r)}" onclick="selectReason('${esc(r)}')">${esc(r)}</div>`).join('')}
+    </div>
+    ${S.returnReason==='Faulty' ? `
+      <h2>Which part(s) are faulty?</h2>
+      <p class="lead" style="margin-bottom:10px;">For our records and the warranty card, which doesn't cover every fault.</p>
+      <div class="reason-grid" id="faultGrid">
+        ${FAULT_PARTS.map(f=>`<div class="reason-btn ${(S.returnFaultParts||[]).includes(f)?'selected':''}" data-f="${esc(f)}" onclick="toggleFaultPart('${esc(f)}')">${esc(f)}</div>`).join('')}
+      </div>
+      <div class="field">
+        <label>Additional notes (optional)</label>
+        <textarea id="returnNotesInput" placeholder="Any extra detail for the warranty record">${esc(S.returnNotes||'')}</textarea>
+      </div>
+    ` : ''}
+    <div id="returnErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="confirmReturn()">Confirm return</button>
+  </div>`;
+}
+function syncReturnNotes(){ const el = document.getElementById('returnNotesInput'); if(el) S.returnNotes = el.value; }
+function selectReason(r){
+  syncReturnNotes();
+  S.returnReason = r;
+  if(r!=='Faulty') S.returnFaultParts = [];
+  render();
+}
+function toggleFaultPart(f){
+  syncReturnNotes();
+  if(!S.returnFaultParts) S.returnFaultParts = [];
+  const i = S.returnFaultParts.indexOf(f);
+  if(i>=0) S.returnFaultParts.splice(i,1); else S.returnFaultParts.push(f);
+  render();
+}
+async function confirmReturn(){
+  syncReturnNotes();
+  if(!S.returnReason){ document.getElementById('returnErr').innerHTML = '<div class="err">Pick a reason for the return.</div>'; return; }
+  if(S.returnReason==='Faulty' && (!S.returnFaultParts || S.returnFaultParts.length===0)){ document.getElementById('returnErr').innerHTML = '<div class="err">Select at least one faulty part.</div>'; return; }
+  const phoneId = selectedPhone.id;
+  const who = S.staffName;
+  const reason = S.returnReason;
+  const parts = reason==='Faulty' ? (S.returnFaultParts||[]) : null;
+  const notes = S.returnNotes || null;
+  const isFaulty = reason === 'Faulty';
+  await mutateShop(S.shopId, data => {
+    const p = data.inventory.find(x=>x.id===phoneId);
+    if(!p) return;
+    p.status = isFaulty ? 'faulty' : 'in_stock';
+    p.returnReason = reason;
+    p.faultParts = parts;
+    p.returnNotes = notes;
+    p.dateReturned = todayStr();
+    p.returnedTs = Date.now();
+    const faultText = (parts && parts.length) ? ' - faults: '+parts.join(', ') : '';
+    pushLedger(data, {type:'returned', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, reason:reason, faultParts:parts, notes:notes, by:who, toFaulty:isFaulty});
+    pushActivity(null, 'return', '', data, who+' logged a return: '+p.model+' ('+p.imei+') - '+reason+faultText+(isFaulty?' [moved to faulty shelf]':''));
+  });
+  selectedPhone = null;
+  S.returnFaultParts = null;
+  S.returnNotes = null;
+  showSuccessThen(isFaulty ? 'Return recorded. Put this phone on the faulty shelf - do not sell it.' : 'Return recorded. Phone is back in stock.', 'staffMenu');
+}
+
+function screenReceive(){
+  if(!requireOpenDay()) return dayNotOpenScreen();
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  // Resume an unfinished document (this device or another) automatically,
+  // so a half-done receiving doc is never quietly lost or duplicated.
+  if((!S.receiveBatch || S.receiveBatch.lines.length===0) && !S.receiveLineDraft
+     && data.draftReceiving && data.draftReceiving.lines && data.draftReceiving.lines.length){
+    S.receiveBatch = {lines: data.draftReceiving.lines.slice()};
+    S.receiveStep = 'batchSummary';
+  }
+  if(!S.receiveBatch) S.receiveBatch = {lines:[]};
+  const step = S.receiveStep || 'lineDetails';
+  if(step === 'lineImeis') return screenReceiveLineImeis();
+  if(step === 'batchSummary') return screenReceiveBatchSummary();
+  return screenReceiveLineDetails();
+}
+function screenReceiveLineDetails(){
+  const d = S.receiveLineDraft || {};
+  const batchCount = (S.receiveBatch && S.receiveBatch.lines.length) || 0;
+  return `
+  ${topbar('Stock receiving document', shopName(S.shopId) + (batchCount>0 ? ' - item '+(batchCount+1) : ''), true)}
+  <div class="content">
+    ${batchCount>0 ? `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">${batchCount} item(s) already added to this document. Add another colour or model below, or finish from the batch list.</div>` : ''}
+    <div class="field">
+      <label>Model</label>
+      <input type="text" id="recvModel" list="modelList" placeholder="e.g. A55" value="${esc(d.model||'')}">
+      <datalist id="modelList">${COMMON_MODELS.map(m=>`<option value="${esc(m)}">`).join('')}</datalist>
+    </div>
+    <div class="field">
+      <label>Description (colour, storage)</label>
+      <input type="text" id="recvDesc" placeholder="e.g. Green 256gb" value="${esc(d.description||'')}">
+    </div>
+    <div class="field">
+      <label>How many pieces of this colour/storage?</label>
+      <input type="tel" inputmode="numeric" id="recvQty" placeholder="e.g. 5" value="${d.qty||''}">
+    </div>
+    <div id="recvErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="proceedToLineImeis()">Next: enter IMEIs</button>
+    ${batchCount>0 ? `<button class="btn btn-outline btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to item list</button>` : ''}
+  </div>`;
+}
+function proceedToLineImeis(){
+  const model = document.getElementById('recvModel').value.trim();
+  const description = document.getElementById('recvDesc').value.trim();
+  const qty = parseInt(document.getElementById('recvQty').value.trim());
+  if(!model){ document.getElementById('recvErr').innerHTML = '<div class="err">Enter the phone model.</div>'; return; }
+  if(isNaN(qty) || qty<=0 || qty>200){ document.getElementById('recvErr').innerHTML = '<div class="err">Enter how many pieces (1-200).</div>'; return; }
+  S.receiveLineDraft = {model, description, qty, imeis: new Array(qty).fill('')};
+  S.receiveStep = 'lineImeis';
+  render();
+}
+function screenReceiveLineImeis(){
+  const d = S.receiveLineDraft;
+  const rows = d.imeis.map((val,i)=>`
+    <div class="field" style="margin-bottom:10px;">
+      <label>IMEI ${i+1} of ${d.qty}</label>
+      <input type="text" inputmode="numeric" class="imeiRow" data-idx="${i}" value="${esc(val)}" placeholder="15-digit IMEI">
+    </div>`).join('');
+  return `
+  <div class="topbar">
+    <div>
+      <div class="title">Stock receiving document</div>
+      <div class="sub">${esc(d.model)}${d.description?' - '+esc(d.description):''} &middot; ${d.qty} pcs</div>
+    </div>
+    <button class="back" onclick="S.receiveStep='lineDetails';render();">Back</button>
+  </div>
+  <div class="content">
+    ${rows}
+    <div id="recvImeiErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="confirmLine()">Add this item to the document</button>
+  </div>`;
+}
+async function confirmLine(){
+  const d = S.receiveLineDraft;
+  const inputs = [...document.querySelectorAll('.imeiRow')];
+  const imeis = inputs.map(inp=>inp.value.trim());
+  if(imeis.some(v=>!v)){ document.getElementById('recvImeiErr').innerHTML = '<div class="err">Enter every IMEI before continuing.</div>'; return; }
+  const data = SHOP_CACHE[S.shopId];
+  const existingImeis = new Set(data.inventory.map(p=>p.imei));
+  (S.receiveBatch.lines||[]).forEach(l=>l.imeis.forEach(im=>existingImeis.add(im)));
+  const dupes = imeis.filter(im=>existingImeis.has(im));
+  if(dupes.length>0){ document.getElementById('recvImeiErr').innerHTML = '<div class="err">One or more IMEIs are already recorded: '+esc(dupes.join(', '))+'</div>'; return; }
+  S.receiveBatch.lines.push({batchId: genBatchId(), model: d.model, description: d.description, qty: d.qty, imeis});
+  S.receiveLineDraft = null;
+  S.receiveStep = 'batchSummary';
+  // Save the in-progress document to shared storage so it isn't lost if the
+  // page is closed before "Finish" - this is what the home screen's
+  // "Pick up where you left off" card resumes from.
+  const shopId = S.shopId;
+  const who = S.staffName;
+  const linesSnapshot = S.receiveBatch.lines;
+  await mutateShop(shopId, sd => {
+    sd.draftReceiving = {
+      lines: linesSnapshot,
+      startedBy: (sd.draftReceiving && sd.draftReceiving.startedBy) || who,
+      startedAt: (sd.draftReceiving && sd.draftReceiving.startedAt) || Date.now(),
+      updatedBy: who,
+      updatedAt: Date.now()
+    };
+  });
+  render();
+}
+function screenReceiveBatchSummary(){
+  const lines = S.receiveBatch.lines || [];
+  const totalPcs = lines.reduce((a,l)=>a+l.qty,0);
+  return `
+  ${topbar('Stock receiving document', shopName(S.shopId), true)}
+  <div class="content">
+    <h2>Items in this document</h2>
+    <div class="card">
+      ${lines.length===0 ? '<div class="empty">No items added yet.</div>' : lines.map(l=>`
+        <div class="activity-row"><div class="txt">${esc(l.model)}${l.description?' - '+esc(l.description):''}</div><div class="time">${l.qty} pcs</div></div>
+      `).join('')}
+    </div>
+    <div style="font-size:13px;color:var(--text-soft);margin-bottom:16px;">Total: ${totalPcs} phone(s) across ${lines.length} item(s)</div>
+    <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='lineDetails';render();">Add another colour or model</button>
+    <button class="btn btn-amber btn-full-center" onclick="finishReceiving()">Finish: save document to stock</button>
+  </div>`;
+}
+async function finishReceiving(){
+  const lines = S.receiveBatch.lines || [];
+  if(lines.length===0) return;
+  const who = S.staffName;
+  const totalAdded = await mutateShop(S.shopId, data => {
+    let n = 0;
+    const existing = new Set(data.inventory.map(p=>p.imei));
+    lines.forEach(l=>{
+      l.imeis.forEach(imei=>{
+        if(existing.has(imei)) return;
+        existing.add(imei);
+        const rec = {
+          id: genId(), imei, model: l.model, description: l.description,
+          batchId: l.batchId, costPrice: null, listPrice: null,
+          dateReceived: todayStr(), receivedTs: Date.now(), status: 'in_stock',
+          receivedBy: who,
+          salePrice:null, soldBy:null, dateSold:null, soldTs:null, returnReason:null, faultParts:null, returnNotes:null, dateReturned:null, returnedTs:null,
+          belowPrice:false, priceShortfall:0
+        };
+        data.inventory.push(rec);
+        pushLedger(data, {type:'received', phoneId:rec.id, model:rec.model, description:rec.description, imei:rec.imei, by:who, batchId:rec.batchId});
+        n++;
+      });
+    });
+    const summary = lines.map(l=>l.qty+' x '+l.model+(l.description?' ('+l.description+')':'')).join(', ');
+    pushActivity(null, 'receive', '', data, who+' received '+n+' phone(s): '+summary);
+    data.draftReceiving = null;
+    return n;
+  });
+  S.receiveBatch = {lines:[]};
+  S.receiveLineDraft = null;
+  S.receiveStep = 'lineDetails';
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    ${topbar(shopName(S.shopId), '', false)}
+    <div class="content">
+      <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
+      <button class="btn btn-primary btn-full-center" onclick="go('receive')">Receive more stock</button>
+      <button class="btn btn-outline btn-full-center" onclick="go('staffMenu')">Back to menu</button>
+    </div>`;
+}
+
+function screenEod(){
+  if(!requireOpenDay()) return dayNotOpenScreen();
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  const today = todayStr();
+  const existing = data.dailyLogs.find(l=>l.date===today);
+  return `
+  ${topbar(shopName(S.shopId), 'End of day', true)}
+  <div class="content">
+    ${existing ? `<div class="warn-banner">You already submitted today's count and cash. Submitting again will replace it.</div>` : ''}
+    <div class="field">
+      <label>1. Good phones on the shelf (count them now, one by one)</label>
+      <input type="tel" inputmode="numeric" id="eodCount" value="${existing?existing.physicalCount:''}" placeholder="e.g. 42">
+    </div>
+    <div class="field">
+      <label>2. Faulty phones on the faulty shelf (count separately)</label>
+      <input type="tel" inputmode="numeric" id="eodFaulty" value="${existing && existing.faultyCount!==undefined && existing.faultyCount!==null ? existing.faultyCount : ''}" placeholder="e.g. 2 (put 0 if none)">
+    </div>
+    <div class="field">
+      <label>3. Cash collected today ($)</label>
+      <input type="tel" inputmode="decimal" id="eodCash" value="${existing?existing.cash:''}" placeholder="e.g. 950">
+    </div>
+    <div id="eodErr"></div>
+    <button class="btn btn-amber btn-full-center" onclick="confirmEod()">Submit end of day</button>
+  </div>`;
+}
+async function confirmEod(){
+  const count = parseInt(document.getElementById('eodCount').value.trim());
+  const faultyRaw = document.getElementById('eodFaulty').value.trim();
+  const faulty = faultyRaw === '' ? 0 : parseInt(faultyRaw);
+  const cash = parseFloat(document.getElementById('eodCash').value.trim());
+  if(isNaN(count) || count<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter how many good phones you counted.</div>'; return; }
+  if(isNaN(faulty) || faulty<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter how many faulty phones you counted (put 0 if none).</div>'; return; }
+  if(isNaN(cash) || cash<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter the cash collected today.</div>'; return; }
+  const today = todayStr();
+  const who = S.staffName;
+  await mutateShop(S.shopId, data => {
+    const idx = data.dailyLogs.findIndex(l=>l.date===today);
+    const prev = idx>=0 ? data.dailyLogs[idx] : null;
+    const entry = {date:today, physicalCount:count, faultyCount:faulty, cash:cash, submittedBy:who, timestamp:Date.now()};
+    if(prev){
+      entry.adjustments = prev.adjustments || [];
+      entry.confirmed = prev.confirmed || false;
+      entry.confirmedBy = prev.confirmedBy || null;
+      entry.confirmedAt = prev.confirmedAt || null;
+      entry.resubmitted = (prev.resubmitted||0) + 1;
+      entry.previousCounts = (prev.previousCounts||[]).concat([{physicalCount:prev.physicalCount, faultyCount:prev.faultyCount, cash:prev.cash, submittedBy:prev.submittedBy, timestamp:prev.timestamp}]);
+    }
+    if(idx>=0) data.dailyLogs[idx] = entry; else data.dailyLogs.push(entry);
+    pushLedger(data, {type:'eod', by:who, note:'End of day: '+count+' good, '+faulty+' faulty, '+money(cash)+' cash'+(prev?' (replaced an earlier submission)':'')});
+    pushActivity(null, 'eod', '', data, who+' submitted end of day: '+count+' good phones, '+faulty+' faulty, '+money(cash)+' cash'+(prev?' (RESUBMITTED)':''));
+  });
+  showSuccessThen('End of day submitted. Thank you!', 'staffMenu');
+}
+
+function showSuccessThen(msg, nextView){
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    ${topbar(shopName(S.shopId), '', false)}
+    <div class="content">
+      <div class="success-box">
+        <div class="check">&#10003;</div>
+        <div class="msg">${esc(msg)}</div>
+      </div>
+      <button class="btn btn-primary btn-full-center" onclick="go('${nextView}')">Continue</button>
+    </div>`;
+}
+
+function screenAdminLogin(){
+  return `
+  ${topbar('Admin login', 'Enter your admin username and password', true)}
+  <div class="content">
+    <div class="field">
+      <label>Username</label>
+      <input type="text" id="adminUser" placeholder="e.g. owner" autocapitalize="off">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="adminPass" placeholder="Password">
+    </div>
+    <div id="adminErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitAdminLogin()">Log in</button>
+  </div>`;
+}
+async function submitAdminLogin(){
+  const u = document.getElementById('adminUser').value.trim();
+  const pw = document.getElementById('adminPass').value;
+  const admin = CONFIG.admin || DEFAULT_ADMIN;
+  if(u === admin.username && pw === admin.password){
+    await Promise.all(SHOPS.map(s=>loadShopData(s.id)));
+    S.dashShop = 'all';
+    navTo('ownerDash');
+  } else {
+    document.getElementById('adminErr').innerHTML = '<div class="err">That username or password is not correct.</div>';
+  }
+}
+
+function shopStats(data, date){
+  const soldToday = data.inventory.filter(p=>p.status==='sold' && p.dateSold===date);
+  const revenue = soldToday.reduce((a,p)=>a+(p.salePrice||0),0);
+  const cost = soldToday.reduce((a,p)=>a+(p.costPrice||0),0);
+  const profit = revenue - cost;
+  const unitsSold = soldToday.length;
+  const returnsToday = data.inventory.filter(p=>p.dateReturned===date).length;
+  const receivedToday = data.inventory.filter(p=>p.dateReceived===date).length;
+  const systemStock = data.inventory.filter(p=>p.status==='in_stock').length;
+  const systemFaulty = data.inventory.filter(p=>p.status==='faulty').length;
+  const writtenOff = data.inventory.filter(p=>p.status==='written_off');
+  const writtenOffCost = writtenOff.reduce((a,p)=>a+(p.costPrice||0),0);
+  const belowToday = soldToday.filter(p=>p.belowPrice);
+  const belowShortfall = belowToday.reduce((a,p)=>a+(p.priceShortfall||0),0);
+  const log = data.dailyLogs.find(l=>l.date===date);
+  const variance = log ? (log.physicalCount - systemStock) : null;
+  const faultyVariance = (log && log.faultyCount !== undefined && log.faultyCount !== null) ? (log.faultyCount - systemFaulty) : null;
+  const bd = getBizDay(data, date);
+  const reopened = !!(bd && bd.reopenCount);
+  return {revenue, cost, profit, unitsSold, returnsToday, receivedToday, systemStock, systemFaulty,
+          writtenOffCount: writtenOff.length, writtenOffCost,
+          belowCount: belowToday.length, belowShortfall,
+          log, variance, faultyVariance, reopened};
+}
+function cashNet(log){ return (log.cash||0) + ((log.adjustments||[]).reduce((a,x)=>a+x.amount,0)); }
+function statsForRange(data, start, end){
+  const sold = data.inventory.filter(p=>p.status==='sold' && p.dateSold && p.dateSold>=start && p.dateSold<=end);
+  const revenue = sold.reduce((a,p)=>a+(p.salePrice||0),0);
+  const cost = sold.reduce((a,p)=>a+(p.costPrice||0),0);
+  const profit = revenue - cost;
+  const units = sold.length;
+  const cash = data.dailyLogs.filter(l=>l.date>=start && l.date<=end).reduce((a,l)=>a+cashNet(l),0);
+  const below = sold.filter(p=>p.belowPrice);
+  const belowCount = below.length;
+  const belowShortfall = below.reduce((a,p)=>a+(p.priceShortfall||0),0);
+  return {revenue, profit, units, cash, belowCount, belowShortfall};
+}
+function lastNDaysRange(n){
+  const end = todayStr();
+  const start = daysAgoStr(n-1);
+  return {start, end};
+}
+function allTimeStats(data){ return statsForRange(data, '0000-01-01', '9999-12-31'); }
+function last7Series(data){
+  const days = [];
+  for(let i=6;i>=0;i--){
+    const ds = daysAgoStr(i);
+    const st = statsForRange(data, ds, ds);
+    days.push({date: ds, revenue: st.revenue});
+  }
+  return days;
+}
+function renderBarChart(series){
+  const max = Math.max(1, ...series.map(d=>d.revenue));
+  return `<div style="display:flex;align-items:flex-end;gap:6px;height:110px;margin:4px 0 14px;">
+    ${series.map(d=>`
+      <div style="flex:1;text-align:center;">
+        <div style="background:var(--navy);border-radius:4px 4px 0 0;height:${Math.max(4,(d.revenue/max)*90)}px;"></div>
+        <div style="font-size:9px;color:var(--text-faint);margin-top:4px;">${esc(d.date.slice(5))}</div>
+      </div>`).join('')}
+  </div>`;
+}
+function rangeStatGrid(st, labelPrefix, opts){
+  opts = opts || {};
+  const unitsAttrs = opts.txShop ? ` style="cursor:pointer;" onclick="navTo('ownerTransactions',{txShop:'${opts.txShop}',txScope:'${opts.txScope||'all'}',txType:'sold'})"` : '';
+  return `<div class="stat-grid">
+    <div class="stat"${unitsAttrs}><div class="label">${labelPrefix} units sold</div><div class="value">${st.units}</div></div>
+    <div class="stat"><div class="label">${labelPrefix} revenue</div><div class="value">${money(st.revenue)}</div></div>
+    <div class="stat"><div class="label">${labelPrefix} profit</div><div class="value">${money(st.profit)}</div></div>
+    <div class="stat"><div class="label">${labelPrefix} cash collected</div><div class="value">${money(st.cash)}</div></div>
+  </div>
+  ${st.belowCount ? `<div class="section-flag">${st.belowCount} sale(s) went below your set price - ${money(st.belowShortfall)} less than expected.</div>` : ''}`;
+}
+
+// Corrections/decisions only the admin can make, across all shops.
+// Capped and windowed deliberately so this never turns into an ever-growing
+// backlog of ancient history - it's a nudge, not an inbox.
+function ownerPickupCards(allData){
+  const cards = [];
+  const nowTs = Date.now();
+  const cashCutoff = daysAgoStr(UNCONFIRMED_CASH_LOOKBACK_DAYS - 1);
+  SHOPS.forEach(s=>{
+    const data = allData[s.id];
+    const pending = getPendingBatches(data);
+    if(pending.length){
+      const sorted = pending.slice().sort((a,b)=>(a.dateReceived||'').localeCompare(b.dateReceived||''));
+      const b = sorted[0];
+      const totalPending = pending.reduce((a,x)=>a+x.count,0);
+      cards.push({
+        title: 'Set prices - ' + s.name,
+        sub: totalPending+' phone(s) received, still waiting on Dubai/Zim pricing'+(pending.length>1?' ('+pending.length+' batches)':'')+'.',
+        onclick: `navTo('ownerPricing',{mgmtShop:'${s.id}',pricingBatch:'${b.batchId}'})`
+      });
+    }
+    const unconfirmed = (data.dailyLogs||[]).filter(l=>!l.confirmed && l.date>=cashCutoff).sort((a,b)=>b.date.localeCompare(a.date));
+    unconfirmed.slice(0,2).forEach(l=>{
+      cards.push({
+        title: 'Confirm cash - ' + s.name,
+        sub: money(l.cash)+' reported by '+(l.submittedBy||'staff')+' for '+l.date+'. Tap to review and confirm you have seen it.',
+        onclick: `navTo('ownerCashDetail',{mgmtShop:'${s.id}',cashDate:'${l.date}'})`
+      });
+    });
+    const agedFaulty = (data.inventory||[]).filter(p=>p.status==='faulty' && p.returnedTs && daysSince(p.returnedTs) >= AGED_FAULTY_DAYS);
+    if(agedFaulty.length){
+      const oldest = agedFaulty.slice().sort((a,b)=>(a.returnedTs||0)-(b.returnedTs||0))[0];
+      cards.push({
+        title: agedFaulty.length+' faulty phone(s) need a decision - '+s.name,
+        sub: 'Oldest: '+oldest.model+(oldest.description?' - '+oldest.description:'')+', returned '+daysSince(oldest.returnedTs)+' day(s) ago. Repair or write off.',
+        onclick: `navTo('ownerFaulty',{mgmtShop:'${s.id}'})`
+      });
+    }
+  });
+  return cards;
+}
+function screenOwnerDash(){
+  const today = todayStr();
+  const allData = {};
+  for(const s of SHOPS){ allData[s.id] = SHOP_CACHE[s.id] || emptyShopData(); }
+  const dash = S.dashShop || 'all';
+
+  const tabsHtml = `<div class="tabs">
+    <div class="tab ${dash==='all'?'active':''}" onclick="switchDashTab('all')">All shops</div>
+    ${SHOPS.map(s=>`<div class="tab ${dash===s.id?'active':''}" onclick="switchDashTab('${s.id}')">${esc(s.name)}</div>`).join('')}
+  </div>`;
+
+  let body = '';
+  if(dash==='all'){
+    let totalRevenue=0, totalProfit=0, totalUnits=0, totalCash=0, alerts=0;
+    let totalStock=0, totalFaulty=0, totalBelow=0, totalBelowAmt=0, reopenAlerts=0;
+    let r7={units:0,revenue:0,profit:0,cash:0}, r30={units:0,revenue:0,profit:0,cash:0}, rAll={units:0,revenue:0,profit:0,cash:0};
+    const range7 = lastNDaysRange(7), range30 = lastNDaysRange(30);
+    const rows = SHOPS.map(s=>{
+      const st = shopStats(allData[s.id], today);
+      totalRevenue += st.revenue; totalProfit += st.profit; totalUnits += st.unitsSold;
+      if(st.log) totalCash += cashNet(st.log);
+      totalStock += st.systemStock; totalFaulty += st.systemFaulty;
+      totalBelow += st.belowCount; totalBelowAmt += st.belowShortfall;
+      if(st.reopened) reopenAlerts++;
+      if(st.variance!==null && st.variance!==0) alerts++;
+      const s7 = statsForRange(allData[s.id], range7.start, range7.end);
+      const s30 = statsForRange(allData[s.id], range30.start, range30.end);
+      const sAll = allTimeStats(allData[s.id]);
+      r7.units+=s7.units; r7.revenue+=s7.revenue; r7.profit+=s7.profit; r7.cash+=s7.cash;
+      r30.units+=s30.units; r30.revenue+=s30.revenue; r30.profit+=s30.profit; r30.cash+=s30.cash;
+      rAll.units+=sAll.units; rAll.revenue+=sAll.revenue; rAll.profit+=sAll.profit; rAll.cash+=sAll.cash;
+      return {s, st};
+    });
+    body += `
+    <h2>Today</h2>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Revenue today (all shops)</div><div class="value">${money(totalRevenue)}</div></div>
+      <div class="stat"><div class="label">Profit today (all shops)</div><div class="value">${money(totalProfit)}</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="navTo('ownerTransactions',{txShop:'all',txScope:'today',txType:'sold'})"><div class="label">Units sold today</div><div class="value">${totalUnits}</div></div>
+      <div class="stat"><div class="label">Cash collected today</div><div class="value">${money(totalCash)}</div></div>
+    </div>
+    ${alerts>0 ? `<div class="alert-banner">${alerts} shop(s) have a stock count mismatch today. Check the shop tab for details.</div>` : ''}
+    ${reopenAlerts>0 ? `<div class="alert-banner">${reopenAlerts} shop(s) reopened today's business day after end of day was already submitted. Check the shop tab.</div>` : ''}
+    <h2>Last 7 days (all shops)</h2>
+    ${rangeStatGrid(r7,'7-day')}
+    <h2>Last 30 days (all shops)</h2>
+    ${rangeStatGrid(r30,'30-day')}
+    <h2>All time (all shops)</h2>
+    ${rangeStatGrid(rAll,'All-time',{txShop:'all',txScope:'all'})}
+    <h2>Stock remaining today (all shops)</h2>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Phones in stock</div><div class="value">${totalStock}</div></div>
+      <div class="stat ${totalFaulty>0?'flag-bad':''}"><div class="label">On faulty shelves</div><div class="value">${totalFaulty}</div></div>
+    </div>
+    <div class="card">
+      ${renderStockByModelAll(allData)}
+    </div>
+    ${totalBelow>0 ? `<div class="section-flag">${totalBelow} sale(s) today went below your set price - ${money(totalBelowAmt)} less than expected.</div>` : ''}
+    <h2>Shops</h2>
+    ${rows.map(({s,st})=>`
+      <div class="card" onclick="switchDashTab('${s.id}')" style="cursor:pointer;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-weight:700;">${esc(s.name)}</div>
+          ${st.log===null || st.log===undefined ? '<span class="chip chip-gray">No report yet today</span>' : (st.variance===0 ? '<span class="chip chip-green">Stock matches</span>' : `<span class="chip chip-red">Mismatch: ${st.variance>0?'+':''}${st.variance}</span>`)}
+        </div>
+        <div style="font-size:13px;color:var(--text-soft);margin-top:6px;">
+          ${st.unitsSold} sold &middot; ${money(st.revenue)} revenue &middot; ${st.systemStock} in stock
+        </div>
+      </div>
+    `).join('')}
+    `;
+  } else {
+    const s = SHOPS.find(x=>x.id===dash);
+    const data = allData[dash];
+    const st = shopStats(data, today);
+    const range7 = lastNDaysRange(7), range30 = lastNDaysRange(30);
+    const st7 = statsForRange(data, range7.start, range7.end);
+    const st30 = statsForRange(data, range30.start, range30.end);
+    const stAll = allTimeStats(data);
+    body += `
+    <h2>Today</h2>
+    ${bizDayBanner(data, dash, today)}
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Revenue today</div><div class="value">${money(st.revenue)}</div></div>
+      <div class="stat"><div class="label">Profit today</div><div class="value">${money(st.profit)}</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="navTo('ownerTransactions',{txShop:'${dash}',txScope:'today',txType:'sold'})"><div class="label">Units sold today</div><div class="value">${st.unitsSold}</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="navTo('ownerCashDetail',{mgmtShop:'${dash}',cashDate:'${today}'})"><div class="label">Cash collected${st.log && st.log.confirmed ? ' <span style="color:var(--green);">&#10003;</span>' : ''}</div><div class="value">${st.log ? money(cashNet(st.log)) : 'Not submitted'}</div></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">System stock count</div><div class="value">${st.systemStock}</div></div>
+      <div class="stat ${st.variance===null?'':(st.variance===0?'flag-ok':'flag-bad')}"><div class="label">Physical count today</div><div class="value">${st.log ? st.log.physicalCount : 'Not submitted'}</div></div>
+      <div class="stat" style="cursor:pointer;" onclick="navTo('ownerFaulty',{mgmtShop:'${dash}'})"><div class="label">On faulty shelf (system)</div><div class="value">${st.systemFaulty}</div></div>
+      <div class="stat ${st.faultyVariance===null?'':(st.faultyVariance===0?'flag-ok':'flag-bad')}"><div class="label">Faulty counted today</div><div class="value">${st.log && st.log.faultyCount!==undefined && st.log.faultyCount!==null ? st.log.faultyCount : 'Not submitted'}</div></div>
+    </div>
+    ${st.faultyVariance!==null && st.faultyVariance!==0 ? `<div class="alert-banner">Faulty shelf mismatch of ${st.faultyVariance>0?'+':''}${st.faultyVariance} between the count and the system.</div>` : ''}
+    ${st.reopened ? `<div class="alert-banner">Today's business day was reopened after end of day was submitted (last by ${esc((getBizDay(data,today)||{}).lastReopenBy||'-')}). Check what changed in the transactions log.</div>` : ''}
+    ${st.belowCount>0 ? `<div class="section-flag" style="cursor:pointer;" onclick="navTo('ownerTransactions',{txShop:'${dash}',txScope:'today',txType:'sold',txBelow:true})">${st.belowCount} sale(s) today below your set price - ${money(st.belowShortfall)} short. Tap to see them.</div>` : ''}
+    ${st.writtenOffCount>0 ? `<div style="font-size:13px;color:var(--text-soft);margin-bottom:12px;">${st.writtenOffCount} phone(s) written off all-time &middot; cost value ${money(st.writtenOffCost)}</div>` : ''}
+    ${st.variance!==null && st.variance!==0 ? `<div class="alert-banner">Mismatch of ${st.variance>0?'+':''}${st.variance} between physical count and system stock. Investigate before end of day tomorrow.</div>` : ''}
+    ${st.log===null || st.log===undefined ? `<div class="warn-banner">No end-of-day report submitted yet for today.</div>` : ''}
+    ${st.receivedToday>0 ? `<div style="font-size:13px;color:var(--text-soft);margin-bottom:14px;">${st.receivedToday} phone(s) received today &middot; ${st.returnsToday} return(s) today</div>` : ''}
+    ${(()=>{ const pend = getPendingBatches(data); return pend.length>0 ? `<div class="warn-banner">${pend.length} item(s) received without pricing set. <button class="link-btn" style="color:inherit;" onclick="navTo('ownerPricing',{mgmtShop:'${dash}'})">Set prices</button></div>` : ''; })()}
+    <div style="margin-bottom:14px;display:flex;gap:16px;flex-wrap:wrap;">
+      <button class="link-btn" onclick="navTo('ownerManage',{mgmtShop:'${dash}'})">Fix a mistake</button>
+      <button class="link-btn" onclick="navTo('ownerPricing',{mgmtShop:'${dash}'})">Set prices</button>
+      <button class="link-btn" onclick="navTo('ownerDayReport',{mgmtShop:'${dash}'})">Reports by date</button>
+      <button class="link-btn" onclick="navTo('ownerFaulty',{mgmtShop:'${dash}'})">Faulty &amp; write-offs</button>
+      <button class="link-btn" onclick="navTo('stockSheet',{sheetShop:'${dash}',sheetDate:todayStr(),sheetAdmin:true})">Daily stock sheet</button>
+    </div>
+
+    <h2>Stock remaining today (by model)</h2>
+    <div class="card">
+      ${renderStockByModel(data)}
+
+    </div>
+
+    <h2>Last 7 days</h2>
+    ${renderBarChart(last7Series(data))}
+    ${rangeStatGrid(st7,'7-day')}
+    <h2>Last 30 days</h2>
+    ${rangeStatGrid(st30,'30-day')}
+    <h2>All time</h2>
+    ${rangeStatGrid(stAll,'All-time',{txShop:dash,txScope:'all'})}
+
+    <h2>Recent activity</h2>
+    <div class="card">
+      ${data.activity.length===0 ? '<div class="empty">No activity yet.</div>' : data.activity.slice(0,15).map(a=>`
+        <div class="activity-row"><div class="txt">${esc(a.text)}</div><div class="time">${new Date(a.ts).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div></div>
+      `).join('')}
+    </div>
+    `;
+  }
+
+  return `
+  ${topbar('Admin dashboard', new Date().toLocaleDateString('en-GB',{weekday:'long', day:'numeric', month:'long'}), true)}
+  <div class="content">
+    ${renderPickupSection(ownerPickupCards(allData))}
+    ${refreshRow()}
+    ${tabsHtml}
+    ${body}
+    <div style="margin-top:10px;text-align:center;">
+      <button class="link-btn" onclick="navTo('ownerSettings')">Settings</button>
+    </div>
+  </div>`;
+}
+function renderStockByModel(data){
+  const inStock = data.inventory.filter(p=>p.status==='in_stock');
+  if(inStock.length===0) return '<div class="empty">No stock currently recorded.</div>';
+  const byModel = {};
+  inStock.forEach(p=>{
+    const key = p.model + (p.description ? ' - ' + p.description : '');
+    if(!byModel[key]) byModel[key] = {count:0, value:0, potential:0};
+    byModel[key].count++;
+    byModel[key].value += (p.costPrice||0);
+    byModel[key].potential += ((p.listPrice||p.costPrice||0) - (p.costPrice||0));
+  });
+  const rows = Object.keys(byModel).sort().map(m=>`
+    <tr><td>${esc(m)}</td><td>${byModel[m].count}</td><td>${money(byModel[m].value)}</td><td>${money(byModel[m].potential)}</td></tr>
+  `).join('');
+  return `<table class="stock-table">
+    <tr><th>Model</th><th>Units</th><th>Cost value</th><th>Exp. profit</th></tr>
+    ${rows}
+  </table>`;
+}
+function renderStockByModelAll(allData){
+  const byModel = {};
+  SHOPS.forEach(sh=>{
+    (allData[sh.id].inventory||[]).filter(p=>p.status==='in_stock').forEach(p=>{
+      const key = p.model + (p.description ? ' - ' + p.description : '');
+      if(!byModel[key]) byModel[key] = {total:0, perShop:{}};
+      byModel[key].total++;
+      byModel[key].perShop[sh.id] = (byModel[key].perShop[sh.id]||0) + 1;
+    });
+  });
+  const keys = Object.keys(byModel).sort();
+  if(keys.length===0) return '<div class="empty">No stock currently recorded in any shop.</div>';
+  const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
+  return `<table class="stock-table">
+    <tr><th>Model</th>${SHOPS.map(sh=>`<th>${esc(sh.name.split(' ')[0])}${sh.id==='bulawayo2'?' 2':(sh.id==='bulawayo1'?' 1':'')}</th>`).join('')}<th>Total</th></tr>
+    ${keys.map(k=>`<tr>
+      <td>${esc(k)} ${byModel[k].total<=threshold?'<span class="chip chip-red">Re-up</span>':''}</td>
+      ${SHOPS.map(sh=>`<td>${byModel[k].perShop[sh.id]||0}</td>`).join('')}
+      <td><strong>${byModel[k].total}</strong></td>
+    </tr>`).join('')}
+  </table>`;
+}
+function screenOwnerFaulty(){
+  const shopId = S.mgmtShop;
+  const data = SHOP_CACHE[shopId] || emptyShopData();
+  const faulty = data.inventory.filter(p=>p.status==='faulty').sort((a,b)=>(b.returnedTs||0)-(a.returnedTs||0));
+  const off = data.inventory.filter(p=>p.status==='written_off').sort((a,b)=>(b.writtenOffAt||0)-(a.writtenOffAt||0));
+  const offCost = off.reduce((a,p)=>a+(p.costPrice||0),0);
+  return `
+  ${topbar('Faulty & write-offs', shopName(shopId), true)}
+  <div class="content">
+    ${refreshRow()}
+    <div class="stat-grid">
+      <div class="stat"><div class="label">On faulty shelf</div><div class="value">${faulty.length}</div></div>
+      <div class="stat"><div class="label">Written off (cost)</div><div class="value">${money(offCost)}</div></div>
+    </div>
+    <h2>Faulty shelf</h2>
+    ${faulty.length===0 ? '<div class="card"><div class="empty">Nothing on the faulty shelf.</div></div>' : faulty.map(p=>`
+      <div class="list-item" style="cursor:default;">
+        <div class="model">${esc(p.model)}${p.description?' - '+esc(p.description):''}</div>
+        <div class="imei">IMEI: ${esc(p.imei)} &middot; returned ${esc(p.dateReturned||'-')}</div>
+        <div class="imei">Faults: ${esc((p.faultParts||[]).join(', ') || 'not specified')}</div>
+        ${p.returnNotes ? `<div class="imei">Note: ${esc(p.returnNotes)}</div>` : ''}
+        ${p.costPrice ? `<div class="imei">Cost ${money(p.costPrice)} &middot; sold for ${money(p.salePrice)}</div>` : ''}
+        <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
+          <button class="link-btn" onclick="markRepaired('${p.id}')">Repaired, back to stock</button>
+          <button class="link-btn" style="color:var(--red);" onclick="writeOffPhone('${p.id}')">Write off</button>
+        </div>
+      </div>`).join('')}
+
+    <h2>Written off</h2>
+    <div class="card">
+      ${off.length===0 ? '<div class="empty">Nothing written off.</div>' : off.map(p=>`
+        <div class="activity-row"><div class="txt">${esc(p.model)} &middot; IMEI ${esc(p.imei)}<div class="imei">${esc((p.faultParts||[]).join(', '))}</div></div><div class="time">${esc(p.dateWrittenOff||'')}</div></div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+// ---- Daily stock movement sheet -------------------------------------------
+// Opening stock is never typed in by anyone. It is the closing running count of
+// the day before, rebuilt by replaying the history log up to that moment.
+function startOfDayTs(d){ return new Date(d + 'T00:00:00').getTime(); }
+function endOfDayTs(d){ return new Date(d + 'T23:59:59.999').getTime(); }
+function sheetKey(e){ return (e.model || 'Unknown') + (e.description ? ' - ' + e.description : ''); }
+function replayState(events, untilTs){
+  const st = {};
+  events.filter(e=>e.ts<=untilTs).slice().sort((a,b)=>a.ts-b.ts).forEach(e=>{
+    const id = e.phoneId;
+    if(!id) return;
+    if(!st[id]) st[id] = {model:e.model, description:e.description, place:null};
+    if(e.model) st[id].model = e.model;
+    if(e.description !== undefined && e.description !== null) st[id].description = e.description;
+    switch(e.type){
+      case 'received':    st[id].place = 'stock'; break;
+      case 'sold':        st[id].place = 'sold'; break;
+      case 'returned':    st[id].place = e.toFaulty ? 'faulty' : 'stock'; break;
+      case 'repaired':    st[id].place = 'stock'; break;
+      case 'written_off': st[id].place = 'off'; break;
+      case 'undo_sale':   st[id].place = 'stock'; break;
+      case 'undo_return': st[id].place = 'sold'; break;
+      case 'deleted':     st[id].place = 'gone'; break;
+    }
+  });
+  return st;
+}
+function countPlace(st, place){
+  const m = {};
+  Object.keys(st).forEach(id=>{
+    const x = st[id];
+    if(x.place === place){
+      const k = (x.model||'Unknown') + (x.description ? ' - ' + x.description : '');
+      m[k] = (m[k]||0) + 1;
+    }
+  });
+  return m;
+}
+function totalOf(m){ return Object.keys(m).reduce((a,k)=>a+m[k],0); }
+function buildStockSheet(shopId, date){
+  const events = buildTransactionsForShop(shopId);
+  const sTs = startOfDayTs(date), eTs = endOfDayTs(date);
+  const openState = replayState(events, sTs - 1);
+  const closeState = replayState(events, eTs);
+  const open = countPlace(openState, 'stock');
+  const close = countPlace(closeState, 'stock');
+  const dayEvents = events.filter(e=>e.ts>=sTs && e.ts<=eTs);
+  const salesQty={}, salesAmt={}, recv={}, retStock={}, retFaulty={}, rep={}, off={};
+  dayEvents.forEach(e=>{
+    const k = sheetKey(e);
+    if(e.type==='sold'){ salesQty[k]=(salesQty[k]||0)+1; salesAmt[k]=(salesAmt[k]||0)+(e.price||0); }
+    else if(e.type==='undo_sale'){ salesQty[k]=(salesQty[k]||0)-1; salesAmt[k]=(salesAmt[k]||0)-(e.price||0); }
+    else if(e.type==='received'){ recv[k]=(recv[k]||0)+1; }
+    else if(e.type==='returned'){ if(e.toFaulty) retFaulty[k]=(retFaulty[k]||0)+1; else retStock[k]=(retStock[k]||0)+1; }
+    else if(e.type==='repaired'){ rep[k]=(rep[k]||0)+1; }
+    else if(e.type==='written_off'){ off[k]=(off[k]||0)+1; }
+  });
+  const seen = {};
+  [open, close, salesQty, recv, retStock, retFaulty, rep, off].forEach(m=>Object.keys(m).forEach(k=>{ seen[k]=true; }));
+  const rows = Object.keys(seen).sort().map(k=>{
+    // Goods received has its own column. Comments carry only the movements that
+    // would otherwise make opening + received - sales fail to equal closing.
+    const notes = [];
+    if(retStock[k]) notes.push('+' + retStock[k] + ' returned to stock');
+    if(rep[k]) notes.push('+' + rep[k] + ' repaired');
+    if(retFaulty[k]) notes.push('-' + retFaulty[k] + ' to faulty shelf');
+    if(off[k]) notes.push('-' + off[k] + ' written off');
+    return {model:k, opening:open[k]||0, received:recv[k]||0, sales:salesQty[k]||0, closing:close[k]||0, amount:salesAmt[k]||0, notes:notes.join(', ')};
+  }).filter(r=> r.opening || r.closing || r.sales || r.received || r.notes);
+  return {
+    rows,
+    totals: {
+      opening:  rows.reduce((a,r)=>a+r.opening,0),
+      received: rows.reduce((a,r)=>a+r.received,0),
+      sales:    rows.reduce((a,r)=>a+r.sales,0),
+      closing:  rows.reduce((a,r)=>a+r.closing,0),
+      amount:   rows.reduce((a,r)=>a+r.amount,0)
+    },
+    faulty: {
+      opening: totalOf(countPlace(openState,'faulty')),
+      closing: totalOf(countPlace(closeState,'faulty')),
+      added:   totalOf(retFaulty),
+      repaired:totalOf(rep),
+      written: totalOf(off)
+    }
+  };
+}
+function screenStockSheet(){
+  const shopId = S.sheetShop;
+  const date = S.sheetDate || todayStr();
+  const data = SHOP_CACHE[shopId] || emptyShopData();
+  const sheet = buildStockSheet(shopId, date);
+  const log = data.dailyLogs.find(l=>l.date===date);
+  const bd = getBizDay(data, date);
+  const isAdminView = !!S.sheetAdmin;
+  const preparedBy = isAdminView ? adminName() : (S.staffName || '');
+  return `
+  <div class="topbar no-print">
+    <div>
+      <div class="title">Daily stock sheet</div>
+      <div class="sub">${esc(shopName(shopId))}</div>
+    </div>
+    <button class="back" onclick='navBack()'>Back</button>
+  </div>
+  <div class="content">
+    <div class="field no-print">
+      <label>Sheet date</label>
+      <input type="date" id="sheetDateInput" value="${esc(date)}" onchange="setSheetDate(this.value)">
+    </div>
+    <button class="btn btn-amber btn-full-center no-print" onclick="window.print()">Print this sheet</button>
+    <div style="font-size:12px;color:var(--text-faint);margin-bottom:18px;" class="no-print">Prints on A4. Opening stock is worked out automatically from the day before - nobody types it in.</div>
+
+    <div class="sheet-head">
+      <div>
+        <div class="biz">TOWDAH ELECTRONICS</div>
+        <div class="meta">Daily stock sheet &middot; ${esc(shopName(shopId))}</div>
+        <div class="meta">Date: ${esc(date)}${bd ? ' &middot; day ' + esc(bd.status) : ' &middot; day not opened'}</div>
+      </div>
+      <div class="meta" style="text-align:right;">
+        Prepared by: ${esc(preparedBy || '____________')}<br>
+        Printed: ${esc(nowLabel())}
+      </div>
+    </div>
+
+    <table class="sheet-table">
+      <tr>
+        <th>Date</th><th>Model</th><th>Opening</th><th>Goods received</th><th>Sales</th><th>Closing</th><th>Amount</th><th style="width:22%;">Comments</th>
+      </tr>
+      ${sheet.rows.length===0 ? `<tr><td colspan="8" style="text-align:center;color:var(--text-faint);padding:22px;">No stock movement recorded on this date.</td></tr>` : sheet.rows.map(r=>`
+      <tr>
+        <td>${esc(date.slice(5))}</td>
+        <td>${esc(r.model)}</td>
+        <td class="num">${r.opening}</td>
+        <td class="num">${r.received ? '+' + r.received : '-'}</td>
+        <td class="num">${r.sales}</td>
+        <td class="num">${r.closing}</td>
+        <td class="num">${r.amount ? money(r.amount) : '-'}</td>
+        <td>${r.notes ? `<span class="note">${esc(r.notes)}</span>` : ''}&nbsp;</td>
+      </tr>`).join('')}
+      <tr class="total-row">
+        <td></td><td>TOTAL</td>
+        <td class="num">${sheet.totals.opening}</td>
+        <td class="num">${sheet.totals.received}</td>
+        <td class="num">${sheet.totals.sales}</td>
+        <td class="num">${sheet.totals.closing}</td>
+        <td class="num">${money(sheet.totals.amount)}</td>
+        <td></td>
+      </tr>
+    </table>
+
+    <table class="sheet-table" style="margin-top:14px;">
+      <tr><th colspan="5">Faulty shelf</th></tr>
+      <tr>
+        <th style="text-transform:none;">Opening</th><th style="text-transform:none;">New faults</th><th style="text-transform:none;">Repaired</th><th style="text-transform:none;">Written off</th><th style="text-transform:none;">Closing</th>
+      </tr>
+      <tr>
+        <td class="num">${sheet.faulty.opening}</td>
+        <td class="num">${sheet.faulty.added}</td>
+        <td class="num">${sheet.faulty.repaired}</td>
+        <td class="num">${sheet.faulty.written}</td>
+        <td class="num">${sheet.faulty.closing}</td>
+      </tr>
+    </table>
+
+    <table class="sheet-table" style="margin-top:14px;">
+      <tr><th colspan="4">Counted at end of day</th></tr>
+      <tr>
+        <th style="text-transform:none;">Good phones counted</th><th style="text-transform:none;">Faulty counted</th><th style="text-transform:none;">Cash collected</th><th style="text-transform:none;">Submitted by</th>
+      </tr>
+      <tr>
+        <td class="num">${log ? log.physicalCount : '&nbsp;'}</td>
+        <td class="num">${log && log.faultyCount!==undefined && log.faultyCount!==null ? log.faultyCount : '&nbsp;'}</td>
+        <td class="num">${log ? money(log.cash) : '&nbsp;'}</td>
+        <td class="num">${log ? esc(log.submittedBy||'') : '&nbsp;'}</td>
+      </tr>
+    </table>
+
+    <div class="sign-row">
+      <div class="sign">Shop staff signature</div>
+      <div class="sign">Owner / manager signature</div>
+    </div>
+    <div style="font-size:10px;color:var(--text-faint);margin-top:14px;">Closing stock is the running count carried into the next day. There is no opening stock to enter.</div>
+  </div>`;
+}
+function setSheetDate(v){ S.sheetDate = v; render(); }
+function switchDashTab(id){ S.dashShop = id; render(); }
+
+function screenOwnerSettings(){
+  const pins = CONFIG.pins;
+  const admin = CONFIG.admin || DEFAULT_ADMIN;
+  const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
+  return `
+  ${topbar('Settings', 'Codes, login and alerts', true)}
+  <div class="content">
+    <h2>Shop codes</h2>
+    ${SHOPS.map(s=>`
+      <div class="field">
+        <label>${esc(s.name)} code</label>
+        <input type="tel" inputmode="numeric" maxlength="6" id="pinset_${s.id}" value="${esc(pins[s.id]||'')}">
+      </div>
+    `).join('')}
+    <h2>Admin login</h2>
+    <div class="field">
+      <label>Admin username</label>
+      <input type="text" id="adminUserSet" value="${esc(admin.username||'')}" autocapitalize="off">
+    </div>
+    <div class="field">
+      <label>Admin password</label>
+      <input type="text" id="adminPassSet" value="${esc(admin.password||'')}">
+    </div>
+    <h2>Stock alerts</h2>
+    <div class="field">
+      <label>Flag a model as low stock when quantity is at or below</label>
+      <input type="tel" inputmode="numeric" id="lowStockSet" value="${threshold}">
+    </div>
+    <div id="settingsErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="saveSettings()">Save settings</button>
+  </div>`;
+}
+
+function screenOwnerManage(){
+  const shopId = S.mgmtShop;
+  const data = SHOP_CACHE[shopId] || emptyShopData();
+  setTimeout(()=>attachSearchFilter('manageSearch','managePhoneList'),0);
+  const logs = data.dailyLogs.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
+  const logsHtml = logs.length===0 ? '<div class="empty">No end of day logs yet.</div>' : logs.map(l=>`
+    <div class="activity-row">
+      <div class="txt">${esc(l.date)}: ${l.physicalCount} counted, ${money(l.cash)} cash${l.confirmed ? ' <span class="chip chip-green">Confirmed</span>' : ''}</div>
+      <div style="display:flex;gap:12px;flex:0 0 auto;">
+        <button class="link-btn" onclick="navTo('ownerCashDetail',{mgmtShop:'${shopId}',cashDate:'${esc(l.date)}'})">View</button>
+        <button class="link-btn" style="color:var(--red);" onclick="deleteLog('${esc(l.date)}')">Delete</button>
+      </div>
+    </div>`).join('');
+
+  const phones = data.inventory.slice().sort((a,b)=> (b.dateReceived||'').localeCompare(a.dateReceived||''));
+  return `
+  ${topbar('Fix a mistake', shopName(shopId), true)}
+  <div class="content">
+    <h2>End of day logs</h2>
+    <div class="card">${logsHtml}</div>
+
+    <h2>All phones</h2>
+    <div class="search-box field">
+      <label>Search by model or IMEI</label>
+      <input type="text" id="manageSearch" placeholder="e.g. A15 or last 4 digits">
+    </div>
+    <div id="managePhoneList">
+      ${phones.length===0 ? '<div class="empty">No phones recorded yet.</div>' : phones.map(p=>renderManageRow(p)).join('')}
+    </div>
+  </div>`;
+}
+function renderManageRow(p){
+  let statusChip = '';
+  if(p.status==='sold') statusChip = '<span class="chip chip-red">Sold</span>';
+  else if(p.status==='faulty') statusChip = '<span class="chip chip-red">Faulty shelf</span>';
+  else if(p.status==='written_off') statusChip = '<span class="chip chip-gray">Written off</span>';
+  else if(p.dateReturned) statusChip = '<span class="chip chip-gray">Returned, in stock</span>';
+  else statusChip = '<span class="chip chip-green">In stock</span>';
+  let actionBtns = '';
+  if(p.status==='sold'){
+    actionBtns += `<button class="link-btn" onclick="undoSale('${p.id}')">Undo sale</button>&nbsp;&nbsp;`;
+  }
+  if(p.dateReturned && (p.status==='in_stock' || p.status==='faulty')){
+    actionBtns += `<button class="link-btn" onclick="undoReturn('${p.id}')">Undo return</button>&nbsp;&nbsp;`;
+  }
+  if(p.status==='faulty'){
+    actionBtns += `<button class="link-btn" onclick="markRepaired('${p.id}')">Repaired</button>&nbsp;&nbsp;`;
+    actionBtns += `<button class="link-btn" onclick="writeOffPhone('${p.id}')">Write off</button>&nbsp;&nbsp;`;
+  }
+  actionBtns += `<button class="link-btn" style="color:var(--red);" onclick="deletePhone('${p.id}')">Delete entry</button>`;
+  return `
+  <div class="list-item" data-model="${esc(p.model.toLowerCase())}" data-imei="${esc(p.imei.toLowerCase())}" style="cursor:default;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+      <div>
+        <div class="model">${esc(p.model)}${p.description?' - '+esc(p.description):''}</div>
+        <div class="imei">IMEI: ${esc(p.imei)}</div>
+      </div>
+      ${statusChip}
+    </div>
+    <div style="margin-top:8px;font-size:13px;">${actionBtns}</div>
+  </div>`;
+}
+function adminName(){ return (CONFIG.admin && CONFIG.admin.username) || 'admin'; }
+async function undoSale(phoneId){
+  if(!await askConfirm('Undo this sale? The phone goes back into stock and the money comes off today’s revenue.', 'Yes, undo the sale')) return;
+  const shopId = S.mgmtShop;
+  await mutateShop(shopId, data => {
+    const p = data.inventory.find(x=>x.id===phoneId);
+    if(!p) return;
+    pushLedger(data, {type:'undo_sale', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, price:p.salePrice, by:adminName(), note:'Sale undone by admin (was sold by '+(p.soldBy||'-')+' on '+(p.dateSold||'-')+')'});
+    p.status='in_stock'; p.salePrice=null; p.soldBy=null; p.dateSold=null; p.soldTs=null; p.belowPrice=false; p.priceShortfall=0;
+    pushActivity(null, 'edit', '', data, 'Sale undone by admin: '+p.model+' ('+p.imei+')');
+  });
+  render();
+}
+async function undoReturn(phoneId){
+  if(!await askConfirm('Undo this return? The phone goes back to being sold.', 'Yes, undo the return')) return;
+  const shopId = S.mgmtShop;
+  await mutateShop(shopId, data => {
+    const p = data.inventory.find(x=>x.id===phoneId);
+    if(!p) return;
+    pushLedger(data, {type:'undo_return', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, reason:p.returnReason, by:adminName(), note:'Return undone by admin'});
+    p.status='sold'; p.returnReason=null; p.dateReturned=null; p.returnedTs=null; p.faultParts=null; p.returnNotes=null;
+    pushActivity(null, 'edit', '', data, 'Return undone by admin: '+p.model+' ('+p.imei+')');
+  });
+  render();
+}
+async function markRepaired(phoneId){
+  if(!await askConfirm('Mark this phone repaired and put it back into sellable stock?', 'Yes, back to stock', false)) return;
+  const shopId = S.mgmtShop;
+  await mutateShop(shopId, data => {
+    const p = data.inventory.find(x=>x.id===phoneId);
+    if(!p) return;
+    pushLedger(data, {type:'repaired', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, faultParts:p.faultParts, by:adminName(), note:'Repaired, returned to sellable stock'});
+    p.status='in_stock'; p.repairedAt = Date.now(); p.repairedBy = adminName();
+    p.salePrice=null; p.dateSold=null; p.soldTs=null; p.soldBy=null; p.belowPrice=false; p.priceShortfall=0;
+    pushActivity(null, 'edit', '', data, 'Repaired and back in stock: '+p.model+' ('+p.imei+')');
+  });
+  render();
+}
+async function writeOffPhone(phoneId){
+  if(!await askConfirm('Write this phone off as a total loss? It leaves stock completely and is recorded as a loss.', 'Yes, write it off')) return;
+  const shopId = S.mgmtShop;
+  await mutateShop(shopId, data => {
+    const p = data.inventory.find(x=>x.id===phoneId);
+    if(!p) return;
+    pushLedger(data, {type:'written_off', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, faultParts:p.faultParts, price:p.costPrice, by:adminName(), note:'Written off as a loss'});
+    p.status='written_off'; p.writtenOffAt = Date.now(); p.writtenOffBy = adminName(); p.dateWrittenOff = todayStr();
+    pushActivity(null, 'edit', '', data, 'Written off: '+p.model+' ('+p.imei+')');
+  });
+  render();
+}
+async function deletePhone(phoneId){
+  if(!await askConfirm('Delete this phone entry completely? This cannot be undone.', 'Yes, delete it')) return;
+  const shopId = S.mgmtShop;
+  await mutateShop(shopId, data => {
+    const p = data.inventory.find(x=>x.id===phoneId);
+    if(p) pushLedger(data, {type:'deleted', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, by:adminName(), note:'Stock entry deleted by admin'});
+    data.inventory = data.inventory.filter(x=>x.id!==phoneId);
+    pushActivity(null, 'edit', '', data, 'Entry deleted by admin: '+(p?p.model:'')+' ('+(p?p.imei:'')+')');
+  });
+  render();
+}
+async function deleteLog(date){
+  if(!await askConfirm('Delete the end of day log for '+date+'?', 'Yes, delete the log')) return;
+  const shopId = S.mgmtShop;
+  await mutateShop(shopId, data => {
+    pushLedger(data, {type:'deleted_eod', by:adminName(), note:'End of day log for '+date+' deleted by admin'});
+    data.dailyLogs = data.dailyLogs.filter(l=>l.date!==date);
+    pushActivity(null, 'edit', '', data, 'End of day log deleted for '+date);
+  });
+  render();
+}
+// The ledger is append-only: history survives even if a phone is re-sold,
+// a sale is undone, or an entry is deleted.
+function buildTransactionsForShop(shopId){
+  const data = SHOP_CACHE[shopId] || emptyShopData();
+  const events = [];
+  const covered = new Set();
+  (data.ledger||[]).forEach(l=>{
+    covered.add((l.phoneId||'') + '|' + l.type);
+    events.push(Object.assign({}, l, {shopId}));
+  });
+  // Records created before the ledger existed still show up.
+  data.inventory.forEach(p=>{
+    if(p.receivedTs && !covered.has(p.id+'|received')) events.push({type:'received', ts:p.receivedTs, model:p.model, description:p.description, imei:p.imei, shopId, phoneId:p.id});
+    if(p.soldTs && !covered.has(p.id+'|sold')) events.push({type:'sold', ts:p.soldTs, model:p.model, description:p.description, imei:p.imei, price:p.salePrice, shopId, phoneId:p.id, belowPrice:p.belowPrice, shortfall:p.priceShortfall});
+    if(p.returnedTs && !covered.has(p.id+'|returned')) events.push({type:'returned', ts:p.returnedTs, model:p.model, description:p.description, imei:p.imei, reason:p.returnReason, faultParts:p.faultParts, shopId, phoneId:p.id});
+  });
+  return events;
+}
+const CORE_TX_TYPES = ['sold','returned','received'];
+const TX_LABELS = {sold:'Sold', returned:'Returned', received:'Received', repaired:'Repaired', written_off:'Written off',
+  undo_sale:'Sale undone', undo_return:'Return undone', deleted:'Entry deleted', deleted_eod:'Day log deleted',
+  price_set:'Prices set', cash_confirmed:'Cash confirmed', cash_adjustment:'Cash adjusted', eod:'End of day', reopen:'Day reopened'};
+function txChipClass(t){
+  if(t==='sold') return 'chip-red';
+  if(t==='received' || t==='repaired') return 'chip-green';
+  return 'chip-gray';
+}
+function buildTransactions(shopKey){
+  let events = [];
+  if(shopKey==='all'){
+    SHOPS.forEach(s=>{ events = events.concat(buildTransactionsForShop(s.id)); });
+  } else {
+    events = buildTransactionsForShop(shopKey);
+  }
+  events.sort((a,b)=>b.ts-a.ts);
+  return events;
+}
+function typeLabel(t){ return TX_LABELS[t] || t; }
+function screenOwnerTransactions(){
+  const shopKey = S.txShop || 'all';
+  const scope = S.txScope || 'today';
+  const typeFilter = S.txType || 'all';
+  let events = buildTransactions(shopKey);
+  if(scope==='today'){ const t = todayStr(); events = events.filter(e => tsDate(e.ts)===t); }
+  if(typeFilter==='corrections'){ events = events.filter(e=>CORE_TX_TYPES.indexOf(e.type)===-1); }
+  else if(typeFilter!=='all'){ events = events.filter(e=>e.type===typeFilter); }
+  if(S.txBelow){ events = events.filter(e=>e.belowPrice); }
+  return `
+  ${topbar('Transactions', shopKey==='all' ? 'All shops' : shopName(shopKey), true)}
+  <div class="content">
+    <div class="tabs">
+      <div class="tab ${scope==='today'?'active':''}" onclick="setTx('txScope','today')">Today</div>
+      <div class="tab ${scope==='all'?'active':''}" onclick="setTx('txScope','all')">All time</div>
+    </div>
+    <div class="tabs">
+      <div class="tab ${typeFilter==='all'?'active':''}" onclick="setTx('txType','all')">All</div>
+      <div class="tab ${typeFilter==='sold'?'active':''}" onclick="setTx('txType','sold')">Sold</div>
+      <div class="tab ${typeFilter==='returned'?'active':''}" onclick="setTx('txType','returned')">Returned</div>
+      <div class="tab ${typeFilter==='received'?'active':''}" onclick="setTx('txType','received')">Received</div>
+      <div class="tab ${typeFilter==='corrections'?'active':''}" onclick="setTx('txType','corrections')">Corrections</div>
+    </div>
+    <div class="tabs">
+      <div class="tab ${S.txBelow?'active':''}" onclick="setTx('txBelow', S.txBelow ? false : true)">Only sales below set price</div>
+    </div>
+    <div class="card">
+      ${events.length===0 ? '<div class="empty">No transactions found for this filter.</div>' : events.map(e=>`
+        <div class="activity-row">
+          <div class="txt">
+            <span class="chip ${txChipClass(e.type)}">${typeLabel(e.type)}</span>
+            ${e.model?esc(e.model):''}${e.description?' - '+esc(e.description):''}${e.imei?' &middot; IMEI '+esc(e.imei):''}
+            ${shopKey==='all' ? ' &middot; '+esc(shopName(e.shopId)) : ''}
+            ${e.price?' &middot; '+money(e.price):''}
+            ${e.belowPrice?' <span class="chip chip-red">'+money(e.shortfall||0)+' below set price</span>':''}
+            ${e.reason?' &middot; '+esc(e.reason):''}
+            ${e.faultParts && e.faultParts.length ? ' &middot; faults: '+esc(e.faultParts.join(', ')) : ''}
+            ${e.note?'<div class="imei">'+esc(e.note)+'</div>':''}
+            ${e.by?'<div class="imei">by '+esc(e.by)+'</div>':''}
+          </div>
+          <div class="time">${new Date(e.ts).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+function setTx(key, val){ S[key] = val; render(); }
+
+function screenOwnerCashDetail(){
+  const shopId = S.mgmtShop;
+  const data = SHOP_CACHE[shopId] || emptyShopData();
+  const date = S.cashDate;
+  const log = data.dailyLogs.find(l=>l.date===date);
+  if(!log){
+    return `
+    ${topbar('Cash detail', shopName(shopId), true)}
+    <div class="content"><div class="empty">No end of day log found for ${esc(date||'')}.</div></div>`;
+  }
+  const adjustments = log.adjustments || [];
+  const net = cashNet(log);
+  return `
+  ${topbar('Cash detail', shopName(shopId) + ' - ' + date, true)}
+  <div class="content">
+    <div class="card">
+      <div style="font-size:13px;color:var(--text-soft);">Submitted by ${esc(log.submittedBy||'-')}</div>
+      <div style="font-size:24px;font-weight:700;margin-top:4px;">${money(log.cash)}</div>
+      <div style="font-size:13px;color:var(--text-soft);margin-top:2px;">Reported cash</div>
+    </div>
+    ${log.confirmed
+      ? `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">Confirmed by ${esc(log.confirmedBy||'admin')} on ${log.confirmedAt?new Date(log.confirmedAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}):''}</div>`
+      : `<button class="btn btn-primary btn-full-center" onclick="confirmCash('${esc(date)}')">Confirm: I have seen this cash</button>`
+    }
+    ${(log.previousCounts && log.previousCounts.length) ? `
+      <div class="section-flag">This day was submitted more than once. Earlier figures are kept below.</div>
+      <div class="card">
+        ${log.previousCounts.map(pc=>`<div class="activity-row"><div class="txt">${money(pc.cash)} cash &middot; ${pc.physicalCount} counted${pc.faultyCount!==undefined&&pc.faultyCount!==null?' &middot; '+pc.faultyCount+' faulty':''} &middot; by ${esc(pc.submittedBy||'-')}</div><div class="time">${pc.timestamp?new Date(pc.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):''}</div></div>`).join('')}
+      </div>` : ''}
+
+    <h2>Adjustments</h2>
+    <div class="card">
+      ${adjustments.length===0 ? '<div class="empty">No adjustments yet.</div>' : adjustments.map(a=>`
+        <div class="activity-row"><div class="txt">${a.amount>=0?'+':''}${money(a.amount)} - ${esc(a.reason)}</div><div class="time">${new Date(a.ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div></div>
+      `).join('')}
+    </div>
+    <div class="stat" style="margin-bottom:16px;">
+      <div class="label">Net cash after adjustments</div>
+      <div class="value">${money(net)}</div>
+    </div>
+
+    <h2>Add adjustment</h2>
+    <div class="field">
+      <label>Amount ($) - use a minus sign to deduct, e.g. -20</label>
+      <input type="tel" inputmode="decimal" id="adjAmount" placeholder="e.g. -20 or 15">
+    </div>
+    <div class="field">
+      <label>Reason</label>
+      <input type="text" id="adjReason" placeholder="e.g. Bank deposit fee, or till top-up">
+    </div>
+    <div id="adjErr"></div>
+    <button class="btn btn-outline btn-full-center" onclick="addCashAdjustment('${esc(date)}')">Add adjustment</button>
+  </div>`;
+}
+async function confirmCash(date){
+  await mutateShop(S.mgmtShop, data => {
+    const log = data.dailyLogs.find(l=>l.date===date);
+    if(!log) return;
+    log.confirmed = true;
+    log.confirmedBy = adminName();
+    log.confirmedAt = Date.now();
+    pushLedger(data, {type:'cash_confirmed', by:adminName(), note:'Confirmed cash seen for '+date+': '+money(log.cash)});
+    pushActivity(null, 'edit', '', data, 'Admin confirmed cash seen for '+date+' ('+money(log.cash)+')');
+  });
+  render();
+}
+async function addCashAdjustment(date){
+  const amtRaw = document.getElementById('adjAmount').value.trim();
+  const reason = document.getElementById('adjReason').value.trim();
+  const amt = parseFloat(amtRaw);
+  if(isNaN(amt) || amt===0){ document.getElementById('adjErr').innerHTML = '<div class="err">Enter a non-zero amount.</div>'; return; }
+  if(!reason){ document.getElementById('adjErr').innerHTML = '<div class="err">Enter a reason for this adjustment.</div>'; return; }
+  await mutateShop(S.mgmtShop, data => {
+    const log = data.dailyLogs.find(l=>l.date===date);
+    if(!log) return;
+    if(!log.adjustments) log.adjustments = [];
+    log.adjustments.push({amount:amt, reason, ts:Date.now(), by:adminName()});
+    pushLedger(data, {type:'cash_adjustment', by:adminName(), price:amt, note:'Cash adjustment on '+date+': '+(amt>=0?'+':'')+money(amt)+' - '+reason});
+    pushActivity(null, 'edit', '', data, 'Cash adjustment on '+date+': '+(amt>=0?'+':'')+money(amt)+' - '+reason);
+  });
+  render();
+}
+
+function getPendingBatches(data){
+  const map = {};
+  data.inventory.forEach(p=>{
+    if((p.costPrice===null || p.costPrice===undefined) && p.batchId){
+      if(!map[p.batchId]) map[p.batchId] = {batchId:p.batchId, model:p.model, description:p.description, count:0, dateReceived:p.dateReceived};
+      map[p.batchId].count++;
+    }
+  });
+  return Object.values(map);
+}
+function getPricedBatches(data){
+  const map = {};
+  data.inventory.forEach(p=>{
+    if(p.costPrice !== null && p.costPrice !== undefined && p.batchId){
+      if(!map[p.batchId]) map[p.batchId] = {batchId:p.batchId, model:p.model, description:p.description, count:0, dateReceived:p.dateReceived, costPrice:p.costPrice, listPrice:p.listPrice};
+      map[p.batchId].count++;
+    }
+  });
+  return Object.values(map).sort((a,b)=>(b.dateReceived||'').localeCompare(a.dateReceived||''));
+}
+function screenOwnerPricing(){
+  const shopId = S.mgmtShop;
+  const data = SHOP_CACHE[shopId] || emptyShopData();
+  if(S.pricingBatch) return screenOwnerPricingForm(shopId, data, S.pricingBatch);
+  const pending = getPendingBatches(data);
+  const priced = getPricedBatches(data);
+  return `
+  ${topbar('Set prices', shopName(shopId), true)}
+  <div class="content">
+    <h2>Waiting for prices</h2>
+    ${pending.length===0 ? '<div class="card"><div class="empty">All received stock has pricing set.</div></div>' : pending.map(b=>`
+      <div class="list-item" onclick="S.pricingBatch='${b.batchId}';render();">
+        <div class="model">${esc(b.model)}${b.description?' - '+esc(b.description):''}</div>
+        <div class="imei">${b.count} pcs &middot; received ${esc(b.dateReceived)}</div>
+      </div>
+    `).join('')}
+    <h2>Already priced (tap to change)</h2>
+    ${priced.length===0 ? '<div class="card"><div class="empty">No priced batches yet.</div></div>' : priced.map(b=>`
+      <div class="list-item" onclick="S.pricingBatch='${b.batchId}';render();">
+        <div class="model">${esc(b.model)}${b.description?' - '+esc(b.description):''}</div>
+        <div class="imei">${b.count} pcs &middot; received ${esc(b.dateReceived)}</div>
+        <div class="imei">Dubai ${money(b.costPrice)} &middot; Zim ${money(b.listPrice)} &middot; margin ${money((b.listPrice||0)-(b.costPrice||0))}</div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+function screenOwnerPricingForm(shopId, data, batchId){
+  const items = data.inventory.filter(p=>p.batchId===batchId);
+  if(items.length===0){ S.pricingBatch=null; return screenOwnerPricing(); }
+  const sample = items[0];
+  return `
+  <div class="topbar">
+    <div><div class="title">Set prices</div><div class="sub">${esc(sample.model)}${sample.description?' - '+esc(sample.description):''}</div></div>
+    <button class="back" onclick="S.pricingBatch=null;render();">Back</button>
+  </div>
+  <div class="content">
+    <div style="font-size:13px;color:var(--text-soft);margin-bottom:14px;">${items.length} phone(s) in this batch</div>
+    <div class="field"><label>Dubai price per unit ($)</label><input type="tel" inputmode="decimal" id="priceDubai" placeholder="e.g. 120" value="${sample.costPrice!==null&&sample.costPrice!==undefined?sample.costPrice:''}"></div>
+    <div class="field"><label>Zim price per unit ($) <span style="font-weight:400;color:var(--text-faint);">(selling price)</span></label><input type="tel" inputmode="decimal" id="priceZim" placeholder="e.g. 180" value="${sample.listPrice!==null&&sample.listPrice!==undefined?sample.listPrice:''}"></div>
+    <div id="priceErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="savePricingBatch('${batchId}')">Save prices for these ${items.length} phones</button>
+  </div>`;
+}
+async function savePricingBatch(batchId){
+  const dubai = parseFloat(document.getElementById('priceDubai').value.trim());
+  const zim = parseFloat(document.getElementById('priceZim').value.trim());
+  if(isNaN(dubai) || dubai<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter the Dubai price.</div>'; return; }
+  if(isNaN(zim) || zim<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter the Zim price.</div>'; return; }
+  await mutateShop(S.mgmtShop, data => {
+    let count = 0;
+    let model = '';
+    data.inventory.forEach(p=>{
+      if(p.batchId===batchId){
+        p.costPrice=dubai; p.listPrice=zim; count++; model = p.model;
+        if(p.status==='sold' && p.salePrice!==null && p.salePrice!==undefined){
+          if(p.salePrice < zim){ p.belowPrice = true; p.priceShortfall = Math.round((zim - p.salePrice)*100)/100; }
+          else { p.belowPrice = false; p.priceShortfall = 0; }
+        }
+      }
+    });
+    pushLedger(data, {type:'price_set', by:adminName(), batchId:batchId, model:model, note:'Prices set for '+count+' phone(s): Dubai '+money(dubai)+' / Zim '+money(zim)});
+    pushActivity(null, 'edit', '', data, 'Admin set pricing for '+count+' phone(s) ('+money(dubai)+' / '+money(zim)+')');
+  });
+  S.pricingBatch = null;
+  render();
+}
+
+function screenOwnerDayReport(){
+  const shopId = S.mgmtShop;
+  const data = SHOP_CACHE[shopId] || emptyShopData();
+  const date = S.reportDate || todayStr();
+  const log = data.dailyLogs.find(l=>l.date===date);
+  const events = buildTransactionsForShop(shopId).filter(e => tsDate(e.ts)===date);
+  const st = shopStats(data, date);
+  const soldOnDate = data.inventory.filter(p=>p.status==='sold' && p.dateSold===date);
+  const returned = data.inventory.filter(p=>p.dateReturned===date);
+  const received = data.inventory.filter(p=>p.dateReceived===date);
+  const sold = soldOnDate;
+  const revenue = st.revenue;
+  const isToday = date === todayStr();
+  // Closing stock is simply the live running count at the moment the day was closed.
+  // It carries straight into the next day - there is no separate opening stock step.
+  const bd = getBizDay(data, date);
+  const hasClose = !!(bd && bd.status === 'closed' && bd.closingStock !== undefined && bd.closingStock !== null);
+  const closeVar = (hasClose && log) ? (log.physicalCount - bd.closingStock) : null;
+  const closeFaultyVar = (hasClose && log && log.faultyCount !== undefined && log.faultyCount !== null && bd.closingFaulty !== undefined && bd.closingFaulty !== null) ? (log.faultyCount - bd.closingFaulty) : null;
+  return `
+  ${topbar('Reports by date', shopName(shopId), true)}
+  <div class="content">
+    <div class="field">
+      <label>Choose a date</label>
+      <input type="date" id="reportDateInput" value="${esc(date)}" onchange="setReportDate(this.value)">
+    </div>
+    ${bizDayBanner(data, shopId, date)}
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Units sold</div><div class="value">${sold.length}</div></div>
+      <div class="stat"><div class="label">Revenue</div><div class="value">${money(revenue)}</div></div>
+      <div class="stat"><div class="label">Profit</div><div class="value">${money(st.profit)}</div></div>
+      <div class="stat"><div class="label">Returns</div><div class="value">${returned.length}</div></div>
+      <div class="stat"><div class="label">Received</div><div class="value">${received.length}</div></div>
+      <div class="stat"><div class="label">Cash collected</div><div class="value">${log ? money(cashNet(log)) : 'Not submitted'}</div></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat ${isToday && st.variance!==null ? (st.variance===0?'flag-ok':'flag-bad') : ''}"><div class="label">Good phones counted</div><div class="value">${log ? log.physicalCount : 'Not submitted'}</div></div>
+      <div class="stat ${isToday && st.faultyVariance!==null ? (st.faultyVariance===0?'flag-ok':'flag-bad') : ''}"><div class="label">Faulty phones counted</div><div class="value">${log && log.faultyCount!==undefined && log.faultyCount!==null ? log.faultyCount : 'Not submitted'}</div></div>
+    </div>
+    ${hasClose ? `
+    <div class="stat-grid">
+      <div class="stat ${closeVar===null?'':(closeVar===0?'flag-ok':'flag-bad')}"><div class="label">Stock at close (system)</div><div class="value">${bd.closingStock}</div></div>
+      <div class="stat ${closeFaultyVar===null?'':(closeFaultyVar===0?'flag-ok':'flag-bad')}"><div class="label">Faulty at close (system)</div><div class="value">${bd.closingFaulty!==undefined&&bd.closingFaulty!==null?bd.closingFaulty:'-'}</div></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-faint);margin-bottom:14px;">Closed by ${esc(bd.closedBy||'-')} at ${bd.closedAt?new Date(bd.closedAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'-'}. This is the running count the shop carries into the next day - there is no opening stock to enter.</div>
+    ${closeVar!==null && closeVar!==0 ? `<div class="alert-banner">On this day the shop counted ${closeVar>0?'+':''}${closeVar} against what the system had at close.</div>` : ''}
+    ${closeFaultyVar!==null && closeFaultyVar!==0 ? `<div class="alert-banner">Faulty shelf was out by ${closeFaultyVar>0?'+':''}${closeFaultyVar} at close.</div>` : ''}
+    ` : ''}
+    ${isToday && st.variance!==null && st.variance!==0 ? `<div class="alert-banner">Stock mismatch of ${st.variance>0?'+':''}${st.variance} against the system count right now.</div>` : ''}
+    ${log && log.resubmitted ? `<div class="section-flag">This end of day was submitted ${log.resubmitted+1} times. Last by ${esc(log.submittedBy||'-')}.</div>` : ''}
+    ${st.belowCount>0 ? `<div class="section-flag">${st.belowCount} sale(s) below your set price on this date - ${money(st.belowShortfall)} short.</div>` : ''}
+    <h2>Transactions on this date</h2>
+    <div class="card">
+      ${events.length===0 ? '<div class="empty">No transactions on this date.</div>' : events.map(e=>`
+        <div class="activity-row">
+          <div class="txt"><span class="chip ${e.type==='sold'?'chip-red':(e.type==='returned'?'chip-gray':'chip-green')}">${typeLabel(e.type)}</span> ${esc(e.model)}${e.description?' - '+esc(e.description):''} &middot; IMEI ${esc(e.imei)}${e.price?' &middot; '+money(e.price):''}${e.faultParts&&e.faultParts.length?' &middot; faults: '+esc(e.faultParts.join(', ')):''}</div>
+          <div class="time">${new Date(e.ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+function setReportDate(val){ S.reportDate = val; render(); }
+
+async function saveSettings(){
+  const newPins = {};
+  for(const s of SHOPS){
+    const v = document.getElementById('pinset_'+s.id).value.trim();
+    if(!v || v.length<4){ document.getElementById('settingsErr').innerHTML = '<div class="err">Each shop code needs at least 4 digits.</div>'; return; }
+    newPins[s.id] = v;
+  }
+  const username = document.getElementById('adminUserSet').value.trim();
+  const password = document.getElementById('adminPassSet').value;
+  const threshold = parseInt(document.getElementById('lowStockSet').value.trim());
+  if(!username){ document.getElementById('settingsErr').innerHTML = '<div class="err">Enter an admin username.</div>'; return; }
+  if(!password || password.length<4){ document.getElementById('settingsErr').innerHTML = '<div class="err">Admin password needs at least 4 characters.</div>'; return; }
+  if(isNaN(threshold) || threshold<0){ document.getElementById('settingsErr').innerHTML = '<div class="err">Enter a valid low stock number.</div>'; return; }
+  CONFIG.pins = newPins;
+  CONFIG.admin = {username, password};
+  CONFIG.lowStockThreshold = threshold;
+  await saveConfig();
+  showSuccessThenGeneric('Settings updated.', 'ownerDash');
+}
+function showSuccessThenGeneric(msg, nextView){
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    ${topbar('Admin dashboard','',false)}
+    <div class="content">
+      <div class="success-box"><div class="check">&#10003;</div><div class="msg">${esc(msg)}</div></div>
+      <button class="btn btn-primary btn-full-center" onclick="go('${nextView}')">Continue</button>
+    </div>`;
+}
+
+async function init(){
+  document.getElementById('app').innerHTML = `<div class="content"><p class="lead">Loading...</p></div>`;
+  try{
+    await loadConfig();
+  }catch(e){
+    // Last-resort safety net: the app must never sit on "Loading..." forever.
+    CONFIG = { pins: {...DEFAULT_PINS}, admin: {...DEFAULT_ADMIN}, lowStockThreshold: DEFAULT_LOW_STOCK };
+  }
+  render();
+  startPolling();
+}
+init();
+</script>
+</body>
+</html>
