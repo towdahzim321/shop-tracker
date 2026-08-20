@@ -214,6 +214,21 @@
     background:#fff;border:1.5px solid var(--border);border-radius:20px;padding:7px 14px;
     font-size:13px;font-weight:600;color:var(--navy);font-family:inherit;cursor:pointer;
   }
+  .offline-strip{
+    background:#8E2B25;color:#fff;padding:11px 14px;font-size:12.5px;font-weight:600;line-height:1.45;
+  }
+  .save-error-strip{
+    background:var(--red);color:#fff;padding:11px 14px;font-size:12.5px;font-weight:600;line-height:1.45;
+    display:flex;justify-content:space-between;gap:10px;align-items:flex-start;
+  }
+  .save-error-strip button{
+    background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:8px;
+    padding:5px 10px;font-size:12px;font-weight:600;font-family:inherit;flex:0 0 auto;cursor:pointer;
+  }
+  .fatal-box{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:22px 18px;margin:20px;}
+  .fatal-box h1{font-size:19px;margin-bottom:10px;}
+  .fatal-box p{font-size:14px;color:var(--text-soft);line-height:1.55;margin:0 0 14px;}
+  .fatal-box code{font-size:11px;color:var(--text-faint);word-break:break-all;}
   .sheet-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
   .sheet-head .biz{font-size:17px;font-weight:700;letter-spacing:0.5px;}
   .sheet-head .meta{font-size:12px;color:var(--text-soft);margin-top:2px;}
@@ -228,69 +243,78 @@
   table.sheet-table .note{font-size:10px;color:var(--text-soft);display:block;}
   .sign-row{display:flex;gap:24px;margin-top:26px;}
   .sign-row .sign{flex:1;border-top:1px solid var(--text-faint);padding-top:5px;font-size:11px;color:var(--text-soft);}
+  .print-only{display:none;}
   @media print{
     body{background:#fff;}
     #app{max-width:none;margin:0;padding:0;background:#fff;}
     .content{padding:0;}
     .no-print{display:none !important;}
+    .print-only{display:block;}
+    .topbar .back{display:none !important;}
+    .refresh-row{display:none !important;}
     table.sheet-table{font-size:10.5px;}
     table.sheet-table th{background:#EEE !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     table.sheet-table tr.total-row td{background:#EEE !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     table.sheet-table tr{page-break-inside:avoid;}
     table.sheet-table td{height:26px;}
+    table.stock-table{font-size:11px;}
+    .card{border:1px solid #ccc;-webkit-print-color-adjust:exact;print-color-adjust:exact;page-break-inside:avoid;}
+    .warn-banner,.section-flag,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    h2{page-break-after:avoid;}
     @page{size:A4 portrait;margin:12mm;}
   }
   .section-flag{
     background:var(--amber-bg);color:#7A4E0A;border-radius:10px;padding:11px 13px;
     font-size:13px;font-weight:600;margin-bottom:12px;
   }
-  .pickup-wrap{margin-bottom:20px;}
-  .pickup-heading{
-    font-size:12px;font-weight:700;color:var(--amber-dark);text-transform:uppercase;
-    letter-spacing:0.5px;margin-bottom:8px;
-  }
-  .pickup-item{
-    background:var(--amber-bg);border:1px solid #EBCE95;border-left:4px solid var(--amber);
-  }
-  .pickup-item .model{color:#3A2400;}
-  .pickup-item .imei{color:#7A4E0A;}
-  .local-mode-banner{
-    background:var(--red);color:#fff;text-align:center;font-size:12.5px;font-weight:600;
-    padding:10px 16px;line-height:1.4;
-  }
-  .save-toast{
-    position:fixed;left:12px;right:12px;bottom:14px;z-index:200;max-width:456px;margin:0 auto;
-  }
-  .save-toast .box{
-    background:var(--red);color:#fff;border-radius:12px;padding:13px 14px;font-size:13px;
-    font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,0.3);display:flex;justify-content:space-between;
-    align-items:center;gap:10px;
-  }
-  .save-toast button{
-    background:rgba(255,255,255,0.18);border:none;color:#fff;padding:6px 10px;border-radius:8px;
-    font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;flex:0 0 auto;
-  }
 </style>
 </head>
 <body>
 <div id="app"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SHOPS = [
   {id:'harare', name:'Harare CBD'},
   {id:'bulawayo1', name:'Bulawayo Shop 1'},
   {id:'bulawayo2', name:'Bulawayo Shop 2'}
 ];
-const DEFAULT_PINS = {harare:'1234', bulawayo1:'2345', bulawayo2:'3456'};
-const DEFAULT_ADMIN = {username:'owner', password:'towdah9999'};
+const SUPABASE_URL = 'https://fyizncdfxjfmenudcfds.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_RgCpLFTYc2IMZbbaoEy2LA_SsQ0heGc';
 const DEFAULT_LOW_STOCK = 3;
-const AGED_FAULTY_DAYS = 3;
-const UNCONFIRMED_CASH_LOOKBACK_DAYS = 7;
 const RETURN_REASONS = ['Faulty','Wrong item','Changed mind','Other'];
 const FAULT_PARTS = ['Screen/LCD','Battery','Camera','Charging port','Speaker/Mic','Network/Signal','Buttons','Back cover/glass','Software','Water damage','Other'];
-const COMMON_MODELS = ['Samsung A15','Samsung A25','Samsung A55','Samsung S23','Samsung S24','iPhone 11','iPhone 12','iPhone 13','iPhone 14','iPhone 15'];
+// Full pick-list for "Received new stock" so staff never have to type a model
+// name by hand - only the IMEI (which can't be avoided) needs typing.
+// "Other / not listed" always remains available as a fallback for anything
+// that shows up outside this list.
+const MODEL_CATALOG = {
+  'Samsung': ['Galaxy A04','Galaxy A05','Galaxy A05s','Galaxy A06','Galaxy A14','Galaxy A15','Galaxy A16',
+    'Galaxy A24','Galaxy A25','Galaxy A26','Galaxy A34','Galaxy A35','Galaxy A36','Galaxy A54','Galaxy A55','Galaxy A56',
+    'Galaxy S20','Galaxy S20 Ultra','Galaxy S21','Galaxy S21 Ultra','Galaxy S22','Galaxy S22 Ultra',
+    'Galaxy S23','Galaxy S23 Ultra','Galaxy S24','Galaxy S24 Ultra','Galaxy S25','Galaxy S25 Ultra',
+    'Galaxy Note 10','Galaxy Note 20','Galaxy Note 20 Ultra',
+    'Galaxy Z Flip 4','Galaxy Z Flip 5','Galaxy Z Flip 6','Galaxy Z Fold 4','Galaxy Z Fold 5','Galaxy Z Fold 6'],
+  'iPhone': ['iPhone 7','iPhone 8','iPhone X','iPhone XR','iPhone XS','iPhone XS Max',
+    'iPhone 11','iPhone 11 Pro','iPhone 11 Pro Max',
+    'iPhone 12','iPhone 12 Mini','iPhone 12 Pro','iPhone 12 Pro Max',
+    'iPhone 13','iPhone 13 Mini','iPhone 13 Pro','iPhone 13 Pro Max',
+    'iPhone 14','iPhone 14 Plus','iPhone 14 Pro','iPhone 14 Pro Max',
+    'iPhone 15','iPhone 15 Plus','iPhone 15 Pro','iPhone 15 Pro Max',
+    'iPhone 16','iPhone 16 Plus','iPhone 16 Pro','iPhone 16 Pro Max',
+    'iPhone SE']
+};
 
-let CONFIG = null;
+// `sb` is the one door into the shared database. In real use it is the real
+// Supabase client; automated tests inject window.__SB_OVERRIDE__ before this
+// script runs so nothing here ever needs to touch the internet or the
+// owner's real data to be tested.
+let sb = null;
+let CONFIG = { lowStockThreshold: DEFAULT_LOW_STOCK };
 let SHOP_CACHE = {};
+let ADMIN_SESSION = null;        // {userId, username} once signed in as admin
+let STAFF_LIST_CACHE = {};       // shopId -> [{id,name}]
+let STAFF_NAME_INDEX = {};       // staffId -> name, built up as staff lists load
+let LAST_SYNC_AT = {};           // shopId -> Date of the last successful refresh
 
 let S = { view:'home' };
 
@@ -306,88 +330,48 @@ function genId(){ return 'p' + Date.now() + Math.random().toString(36).slice(2,7
 function genBatchId(){ return 'b' + Date.now() + Math.random().toString(36).slice(2,7); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-// STORAGE_MODE tracks whether we're actually on the shared link ('shared') or
-// had to fall back to this single device's own storage ('local'). render()
-// shows an unmissable banner whenever we're in 'local' mode.
-let STORAGE_MODE = 'shared';
-const LOCAL_PREFIX = 'shoptracker_local_';
-function hasSharedStorage(){
-  return typeof window !== 'undefined' && !!window.storage
-    && typeof window.storage.get === 'function' && typeof window.storage.set === 'function';
+// The app must never show a blank screen just because the shared database
+// can't be reached. If Supabase is unreachable it shows the last saved copy
+// (from this device's cache) with an unmissable warning, rather than dying
+// or pretending a save worked when it didn't.
+let SB_UNREACHABLE = false;
+let SAVE_ERROR = null;
+function offlineBanner(){
+  if(!SB_UNREACHABLE) return '';
+  const label = Object.keys(LAST_SYNC_AT).length ? 'Showing the last saved copy from this device.' : 'No saved copy on this device yet.';
+  return `<div class="offline-strip">NOT CONNECTED &middot; Can't reach the shared database right now. ${label} New entries cannot be saved until the connection is back &mdash; check your internet and try again.</div>`;
 }
-function localGet(key){
-  try{ return localStorage.getItem(LOCAL_PREFIX + key); }catch(e){ return null; }
-}
-function localSet(key, val){
-  try{ localStorage.setItem(LOCAL_PREFIX + key, val); return true; }catch(e){ return false; }
-}
-async function sget(key){
-  if(hasSharedStorage()){
-    try{
-      const r = await window.storage.get(key, true);
-      STORAGE_MODE = 'shared';
-      if(r === null || r === undefined) return null;
-      if(typeof r === 'string') return r;
-      if(typeof r.value === 'string') return r.value;
-      if(r.value === null || r.value === undefined) return null;
-      return String(r.value);
-    }catch(e){
-      STORAGE_MODE = 'local';
-      return localGet(key);
-    }
-  }
-  STORAGE_MODE = 'local';
-  return localGet(key);
-}
-async function sset(key, val){
-  if(hasSharedStorage()){
-    try{
-      await window.storage.set(key, val, true);
-      STORAGE_MODE = 'shared';
-      return true;
-    }catch(e){
-      STORAGE_MODE = 'local';
-      if(!localSet(key, val)) throw new Error('save-failed');
-      return true;
-    }
-  }
-  STORAGE_MODE = 'local';
-  if(!localSet(key, val)) throw new Error('save-failed');
-  return true;
+function saveErrorBanner(){
+  if(!SAVE_ERROR) return '';
+  return `<div class="save-error-strip"><span>${esc(SAVE_ERROR)}</span><button onclick="SAVE_ERROR=null;render();">Hide</button></div>`;
 }
 
-async function loadConfig(){
+// The only remaining app-wide setting is the low-stock threshold. Shop PINs
+// and the admin login are gone: staff use personal PINs (`staff` table) and
+// the admin uses a real Supabase Auth login, both checked by the database.
+async function loadSettings(){
+  if(!sb){ SB_UNREACHABLE = true; return; }
   try{
-    const raw = await sget('app_config');
-    CONFIG = JSON.parse(raw);
-    let changed = false;
-    if(!CONFIG.admin){ CONFIG.admin = {...DEFAULT_ADMIN}; changed = true; }
-    if(!CONFIG.lowStockThreshold && CONFIG.lowStockThreshold !== 0){ CONFIG.lowStockThreshold = DEFAULT_LOW_STOCK; changed = true; }
-    if(!CONFIG.pins){ CONFIG.pins = {...DEFAULT_PINS}; changed = true; }
-    if(changed) await saveConfig();
+    const { data, error } = await sb.from('settings').select('low_stock_threshold').eq('id', true).single();
+    if(error) throw error;
+    if(data) CONFIG.lowStockThreshold = data.low_stock_threshold;
+    SB_UNREACHABLE = false;
+  }catch(e){ SB_UNREACHABLE = true; }
+}
+async function saveLowStockThreshold(n){
+  try{
+    const { error } = await sb.from('settings').update({low_stock_threshold:n}).eq('id', true);
+    if(error) throw error;
+    CONFIG.lowStockThreshold = n;
+    SAVE_ERROR = null;
+    return true;
   }catch(e){
-    CONFIG = { pins: {...DEFAULT_PINS}, admin: {...DEFAULT_ADMIN}, lowStockThreshold: DEFAULT_LOW_STOCK };
-    try{ await sset('app_config', JSON.stringify(CONFIG)); }catch(e2){ /* keep going with in-memory config so the app still opens */ }
+    SAVE_ERROR = 'Could not save the settings just now. Check your internet and try again.';
+    return false;
   }
 }
-async function saveConfig(){
-  await sset('app_config', JSON.stringify(CONFIG));
-}
-function emptyShopData(){ return { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [], draftReceiving: null }; }
-function normalizeShop(d){
-  if(!d.inventory) d.inventory = [];
-  if(!d.dailyLogs) d.dailyLogs = [];
-  if(!d.activity) d.activity = [];
-  if(!d.businessDays) d.businessDays = [];
-  if(!d.ledger) d.ledger = [];
-  if(d.draftReceiving === undefined) d.draftReceiving = null;
-  return d;
-}
-function pushLedger(data, entry){
-  if(!data.ledger) data.ledger = [];
-  data.ledger.push(Object.assign({lid: genId(), ts: Date.now()}, entry));
-  if(data.ledger.length > 4000) data.ledger = data.ledger.slice(-4000);
-}
+
+function emptyShopData(){ return { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [] }; }
 function getBizDay(data, date){ return (data.businessDays||[]).find(b=>b.date===date); }
 function isDayOpen(data, date){ const b = getBizDay(data,date); return !!b && b.status==='open'; }
 function bizDayBanner(data, shopId, date){
@@ -400,79 +384,176 @@ function bizDayBanner(data, shopId, date){
   }
   return `<div class="alert-banner">Business day ${esc(date)} is not open. Staff cannot log entries until you open it. <button class="link-btn" style="color:inherit;" onclick="openBizDayAction('${shopId}','${date}')">Open today</button></div>`;
 }
-function reopenDay(data, date, who){
-  if(!data.businessDays) data.businessDays = [];
-  let b = getBizDay(data, date);
-  const wasClosed = !!(b && b.status === 'closed');
-  const eodExists = !!data.dailyLogs.find(l=>l.date===date);
-  if(!b){ b = {date, status:'open', openedBy:who, openedAt:Date.now(), closedBy:null, closedAt:null}; data.businessDays.push(b); }
-  else { b.status='open'; b.openedBy=who; b.openedAt=Date.now(); b.closedBy=null; b.closedAt=null; }
-  if(wasClosed && eodExists){
-    b.reopenCount = (b.reopenCount||0) + 1;
-    b.lastReopenBy = who;
-    b.lastReopenAt = Date.now();
-    pushLedger(data, {type:'reopen', by:who, note:'Day '+date+' reopened after end of day was submitted'});
-  }
-  pushActivity(null, 'edit', '', data, 'Business day '+date+' '+(wasClosed?'REOPENED':'opened')+' by '+who+((wasClosed&&eodExists)?' (after end of day was already submitted)':''));
-  return b;
-}
+// Admin reopening a (possibly past) date's business day from a report screen.
 async function openBizDayAction(shopId, date){
-  const admin = (CONFIG.admin && CONFIG.admin.username) || 'admin';
-  await mutateShop(shopId, data => reopenDay(data, date, admin));
+  const res = await callRpc('admin_reopen_day', {p_shop_id: shopId, p_date: date});
+  if(res.ok) await refreshShopData(shopId);
   render();
 }
+
+// ---- Talking to Supabase --------------------------------------------------
+// One narrow door in: callRpc() for every write, refreshShopData() for every
+// read. Business-rule refusals (like "the day isn't open") come back as
+// clear messages already written for a shop-floor audience; anything else
+// is treated as "can't reach the database right now."
+async function callRpc(name, params){
+  if(!sb){
+    SB_UNREACHABLE = true;
+    SAVE_ERROR = "THAT ENTRY MAY NOT BE SAVED. The app could not reach the shared database. Check your internet and try again.";
+    return { ok:false, error: SAVE_ERROR };
+  }
+  try{
+    const { data, error } = await sb.rpc(name, params);
+    if(error) throw error;
+    SB_UNREACHABLE = false;
+    SAVE_ERROR = null;
+    return { ok:true, data };
+  }catch(e){
+    if(e && e.code === 'P0001' && e.message){
+      SAVE_ERROR = e.message;   // a clear business-rule refusal written for staff to read
+    } else {
+      SB_UNREACHABLE = true;
+      SAVE_ERROR = "THAT ENTRY MAY NOT BE SAVED. The app could not reach the shared database. Check your internet, then check whether it recorded.";
+    }
+    return { ok:false, error: SAVE_ERROR };
+  }
+}
+function cacheKey(shopId){ return 'twcache_' + shopId + (ADMIN_SESSION ? '_admin' : '_staff'); }
+function hydrateFromCache(shopId){
+  try{
+    const raw = window.localStorage.getItem(cacheKey(shopId));
+    if(raw) SHOP_CACHE[shopId] = JSON.parse(raw);
+  }catch(e){ /* no instant paint this time - not fatal */ }
+}
+function cacheToLocal(shopId, data){
+  try{ window.localStorage.setItem(cacheKey(shopId), JSON.stringify(data)); }catch(e){ /* storage full/blocked - not fatal */ }
+}
+async function ensureStaffNames(ids){
+  const missing = [...new Set(ids.filter(id => id && !STAFF_NAME_INDEX[id]))];
+  if(missing.length===0) return;
+  try{
+    const { data, error } = await sb.from('staff').select('id,name').in('id', missing);
+    if(!error && data) data.forEach(s=>{ STAFF_NAME_INDEX[s.id] = s.name; });
+  }catch(e){ /* best-effort - falls back to showing the raw id, which is at least honest */ }
+}
+function mapPhoneRow(r){
+  return {
+    id: r.id, imei: r.imei, model: r.model, description: r.description, batchId: r.batch_id,
+    costPrice: (r.cost_price===undefined) ? null : r.cost_price,
+    listPrice: (r.list_price===undefined) ? null : r.list_price,
+    status: r.status, dateReceived: r.date_received, receivedTs: r.received_ts ? new Date(r.received_ts).getTime() : null, receivedBy: r.received_by,
+    salePrice: r.sale_price, soldBy: r.sold_by, dateSold: r.date_sold, soldTs: r.sold_ts ? new Date(r.sold_ts).getTime() : null,
+    belowPrice: !!r.below_price, priceShortfall: r.price_shortfall || 0,
+    returnReason: r.return_reason, faultParts: r.fault_parts, returnNotes: r.return_notes,
+    dateReturned: r.date_returned, returnedTs: r.returned_ts ? new Date(r.returned_ts).getTime() : null,
+    repairedAt: r.repaired_at ? new Date(r.repaired_at).getTime() : null, repairedBy: r.repaired_by,
+    writtenOffAt: r.written_off_at ? new Date(r.written_off_at).getTime() : null, writtenOffBy: r.written_off_by,
+    dateWrittenOff: r.date_written_off
+  };
+}
+function mapLogRow(r){
+  return {
+    date: r.date, physicalCount: r.physical_count, faultyCount: r.faulty_count, cash: r.cash,
+    submittedBy: STAFF_NAME_INDEX[r.submitted_by] || r.submitted_by || '-',
+    timestamp: r.submitted_at ? new Date(r.submitted_at).getTime() : null,
+    confirmed: !!r.confirmed, confirmedBy: r.confirmed_by, confirmedAt: r.confirmed_at ? new Date(r.confirmed_at).getTime() : null,
+    resubmitted: r.resubmitted || 0, previousCounts: r.previous_counts || [], adjustments: r.adjustments || []
+  };
+}
+function mapDayRow(r){
+  return {
+    date: r.date, status: r.status, openedBy: r.opened_by, openedAt: r.opened_at ? new Date(r.opened_at).getTime() : null,
+    closedBy: r.closed_by, closedAt: r.closed_at ? new Date(r.closed_at).getTime() : null,
+    closingStock: r.closing_stock, closingFaulty: r.closing_faulty,
+    reopenCount: r.reopen_count || 0, lastReopenBy: r.last_reopen_by, lastReopenAt: r.last_reopen_at ? new Date(r.last_reopen_at).getTime() : null
+  };
+}
+function mapLedgerRow(r){
+  const extra = r.extra || {};
+  return {
+    lid: r.id, ts: new Date(r.ts).getTime(), type: r.type,
+    phoneId: r.phone_id, model: r.model, description: r.description, imei: r.imei, price: r.price,
+    by: r.by_staff ? (STAFF_NAME_INDEX[r.by_staff] || 'staff') : (r.by_admin || null),
+    note: r.note,
+    reason: extra.reason, faultParts: extra.faultParts, notes: extra.notes, toFaulty: extra.toFaulty,
+    belowPrice: extra.belowPrice, shortfall: extra.shortfall, batchId: extra.batchId
+  };
+}
+function ledgerEntryText(e){
+  const who = e.by || 'someone';
+  const nm = e.model ? (e.model + (e.description ? ' - '+e.description : '')) : '';
+  switch(e.type){
+    case 'received': return who+' received '+nm+(e.imei?' (IMEI '+e.imei+')':'');
+    case 'sold': return who+' sold '+nm+' for '+money(e.price)+(e.belowPrice?' (below set price)':'');
+    case 'returned': return who+' logged a return: '+nm+' - '+(e.reason||'')+(e.toFaulty?' [moved to faulty shelf]':'');
+    case 'repaired': return nm+' repaired and back in stock (by '+who+')';
+    case 'written_off': return nm+' written off (by '+who+')';
+    case 'undo_sale': return 'Sale undone by '+who+': '+nm;
+    case 'undo_return': return 'Return undone by '+who+': '+nm;
+    case 'deleted': return 'Entry deleted by '+who+': '+nm;
+    default: return e.note || (who+' - '+e.type);
+  }
+}
+// Best-effort instant push updates when another device changes this shop's
+// data. If this fails to connect for any reason, the existing 15-second
+// background refresh (further down) still keeps everyone in sync regardless
+// - this is a snappiness upgrade, not something anything else depends on.
+let REALTIME_CHANNELS = {};
+function subscribeToShop(shopId){
+  if(!sb || typeof sb.channel !== 'function' || REALTIME_CHANNELS[shopId]) return;
+  try{
+    const bump = () => refreshShopData(shopId).then(()=>{ if(S.shopId===shopId || S.mgmtShop===shopId) render(); });
+    const ch = sb.channel('shop-'+shopId+(ADMIN_SESSION?'-admin':'-staff'))
+      .on('postgres_changes', {event:'*', schema:'public', table:'phones', filter:'shop_id=eq.'+shopId}, bump)
+      .on('postgres_changes', {event:'*', schema:'public', table:'daily_logs', filter:'shop_id=eq.'+shopId}, bump)
+      .on('postgres_changes', {event:'*', schema:'public', table:'business_days', filter:'shop_id=eq.'+shopId}, bump)
+      .subscribe();
+    REALTIME_CHANNELS[shopId] = ch;
+  }catch(e){ /* realtime is a nice-to-have; the poll timer still covers us */ }
+}
 async function loadShopData(shopId){
-  if(SHOP_CACHE[shopId]) return SHOP_CACHE[shopId];
+  if(!SHOP_CACHE[shopId]) hydrateFromCache(shopId);
+  subscribeToShop(shopId);
+  if(SHOP_CACHE[shopId]){
+    refreshShopData(shopId).then(()=>{ if(S.shopId===shopId || S.mgmtShop===shopId) render(); });
+    return SHOP_CACHE[shopId];
+  }
   return refreshShopData(shopId);
 }
 async function refreshShopData(shopId){
+  if(!sb){ SB_UNREACHABLE = true; if(!SHOP_CACHE[shopId]) SHOP_CACHE[shopId] = emptyShopData(); return SHOP_CACHE[shopId]; }
+  const isAdmin = !!ADMIN_SESSION;
+  const phonesTable = isAdmin ? 'phones' : 'phones_staff_view';
+  const ledgerTable = isAdmin ? 'ledger' : 'ledger_staff_view';
   try{
-    const raw = await sget('shop_data_' + shopId);
-    if(raw){ SHOP_CACHE[shopId] = normalizeShop(JSON.parse(raw)); }
-    else if(!SHOP_CACHE[shopId]){ SHOP_CACHE[shopId] = emptyShopData(); }
+    const [phonesRes, logsRes, daysRes, ledgerRes] = await Promise.all([
+      sb.from(phonesTable).select('*').eq('shop_id', shopId),
+      sb.from('daily_logs').select('*').eq('shop_id', shopId),
+      sb.from('business_days').select('*').eq('shop_id', shopId),
+      sb.from(ledgerTable).select('*').eq('shop_id', shopId).order('ts',{ascending:false}).limit(5000)
+    ]);
+    if(phonesRes.error) throw phonesRes.error;
+    if(logsRes.error) throw logsRes.error;
+    if(daysRes.error) throw daysRes.error;
+    if(ledgerRes.error) throw ledgerRes.error;
+    await ensureStaffNames(ledgerRes.data.map(r=>r.by_staff).concat(logsRes.data.map(r=>r.submitted_by)));
+    const ledger = ledgerRes.data.map(mapLedgerRow);
+    const data = {
+      inventory: phonesRes.data.map(mapPhoneRow),
+      dailyLogs: logsRes.data.map(mapLogRow),
+      businessDays: daysRes.data.map(mapDayRow),
+      ledger,
+      activity: ledger.map(e => ({ ts: e.ts, type: e.type, text: ledgerEntryText(e) }))
+    };
+    SHOP_CACHE[shopId] = data;
+    SB_UNREACHABLE = false;
+    LAST_SYNC_AT[shopId] = new Date();
+    cacheToLocal(shopId, data);
   }catch(e){
+    SB_UNREACHABLE = true;
     if(!SHOP_CACHE[shopId]) SHOP_CACHE[shopId] = emptyShopData();
   }
   return SHOP_CACHE[shopId];
-}
-async function saveShopData(shopId){
-  await sset('shop_data_' + shopId, JSON.stringify(SHOP_CACHE[shopId]));
-}
-// Pulls the newest copy from shared storage immediately before applying a change,
-// so two phones saving at nearly the same moment do not wipe each other's entries.
-let MUTATE_QUEUE = Promise.resolve();
-function mutateShop(shopId, fn){
-  const run = async ()=>{
-    try{
-      const data = await refreshShopData(shopId);
-      const result = fn(data);
-      await saveShopData(shopId);
-      return result;
-    }catch(e){
-      showSaveError("That didn't save. Please try again — if this keeps happening, tell the owner.");
-      throw e;
-    }
-  };
-  MUTATE_QUEUE = MUTATE_QUEUE.then(run, run);
-  return MUTATE_QUEUE;
-}
-// Shown when a save genuinely fails (both shared and local storage unavailable).
-// Never shown together with a success screen - callers stop (the promise
-// rejects) before they reach any "Saved!" message.
-function showSaveError(msg){
-  const existing = document.querySelector('.save-toast');
-  if(existing) existing.remove();
-  const el = document.createElement('div');
-  el.className = 'save-toast';
-  el.innerHTML = `<div class="box"><span>${esc(msg)}</span><button onclick="this.closest('.save-toast').remove()">Dismiss</button></div>`;
-  document.body.appendChild(el);
-}
-function pushActivity(shopId, type, text, dataObj, altText){
-  const d = dataObj || SHOP_CACHE[shopId];
-  if(!d) return;
-  if(!d.activity) d.activity = [];
-  d.activity.unshift({ts: Date.now(), type, text: (altText !== undefined ? altText : text)});
-  if(d.activity.length > 200) d.activity = d.activity.slice(0,200);
 }
 
 // In-app confirmation. Native confirm() can be blocked inside embedded frames,
@@ -489,6 +570,21 @@ function askConfirm(msg, yesLabel, danger){
       <div class="modal-actions">
         <button class="no" onclick="closeModal(false)">Cancel</button>
         <button class="${danger===false?'yes-safe':'yes'}" onclick="closeModal(true)">${esc(yesLabel||'Yes, do it')}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(el);
+  });
+}
+function askAlert(msg){
+  return new Promise(resolve=>{
+    MODAL_RESOLVE = resolve;
+    const el = document.createElement('div');
+    el.className = 'modal-overlay';
+    el.id = 'modalOverlay';
+    el.innerHTML = `<div class="modal-box">
+      <div class="modal-msg">${esc(msg)}</div>
+      <div class="modal-actions">
+        <button class="yes-safe" style="flex:1;" onclick="closeModal(true)">OK</button>
       </div>
     </div>`;
     document.body.appendChild(el);
@@ -529,21 +625,6 @@ async function pollTick(force){
 function syncLabel(){
   return LAST_SYNC ? 'Updated ' + LAST_SYNC.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : 'Live';
 }
-// Renders the "Pick up where you left off" section. Returns '' when there is
-// nothing unfinished, so it never shows an empty "all done" state.
-function renderPickupSection(cards){
-  if(!cards || cards.length===0) return '';
-  return `<div class="pickup-wrap">
-    <div class="pickup-heading">Pick up where you left off</div>
-    ${cards.map(c=>`
-      <div class="list-item pickup-item" onclick="${c.onclick}">
-        <div class="model">${esc(c.title)}</div>
-        <div class="imei">${esc(c.sub)}</div>
-      </div>`).join('')}
-  </div>`;
-}
-function timeOfDay(ts){ return ts ? new Date(ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : '-'; }
-function daysSince(ts){ return Math.floor((Date.now()-ts)/86400000); }
 function refreshRow(){
   return `<div class="refresh-row">
     <span class="live">&#9679; ${esc(syncLabel())} &middot; refreshes automatically</span>
@@ -553,15 +634,29 @@ function refreshRow(){
 
 function render(){
   const app = document.getElementById('app');
-  app.innerHTML = (STORAGE_MODE==='local' ? localModeBanner() : '') + viewFor(S.view);
+  try{
+    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view);
+  }catch(e){
+    showFatal(e, 'Something went wrong drawing this screen.');
+  }
 }
-function localModeBanner(){
-  return `<div class="local-mode-banner">&#9888; Not connected to the shared shop data. Entries here only save on THIS device - ask the owner for the correct link.</div>`;
+function showFatal(err, headline){
+  const app = document.getElementById('app');
+  const msg = (err && err.message) ? err.message : String(err || 'Unknown problem');
+  app.innerHTML = `
+    <div class="topbar"><div><div class="title">Shop Tracker</div><div class="sub">Could not start</div></div></div>
+    <div class="fatal-box">
+      <h1>${esc(headline || 'The app could not start')}</h1>
+      <p>This usually means the app was opened as a plain file instead of through your shared Shop Tracker link. Open the link the owner sent you, then try again.</p>
+      <p>If you opened the correct link, check your internet connection and press the button below.</p>
+      <button class="btn btn-primary btn-full-center" onclick="location.reload()">Try again</button>
+      <p style="margin-top:14px;"><code>${esc(msg)}</code></p>
+    </div>`;
 }
 function setView(v, extra){ S = Object.assign({view:v}, extra||{}, S.keep ? {keep:S.keep} : {}); render(); }
 function go(v, extra){
   const keep = {};
-  ['shopId','staffName'].forEach(k=>{ if(S[k]!==undefined) keep[k]=S[k]; });
+  ['shopId','staffId','staffName'].forEach(k=>{ if(S[k]!==undefined) keep[k]=S[k]; });
   S = Object.assign({view:v}, keep, extra||{});
   render();
 }
@@ -592,8 +687,8 @@ function viewFor(v){
   switch(v){
     case 'home': return screenHome();
     case 'staffShop': return screenStaffShop();
-    case 'staffPin': return screenStaffPin();
-    case 'staffName': return screenStaffName();
+    case 'staffPicker': return screenStaffPicker();
+    case 'staffPinEntry': return screenStaffPinEntry();
     case 'staffMenu': return screenStaffMenu();
     case 'staffDash': return screenStaffDash();
     case 'sale': return screenSale();
@@ -605,6 +700,7 @@ function viewFor(v){
     case 'adminLogin': return screenAdminLogin();
     case 'ownerDash': return screenOwnerDash();
     case 'ownerSettings': return screenOwnerSettings();
+    case 'wipeShop': return screenWipeShop();
     case 'ownerManage': return screenOwnerManage();
     case 'ownerPricing': return screenOwnerPricing();
     case 'ownerDayReport': return screenOwnerDayReport();
@@ -643,78 +739,72 @@ function screenStaffShop(){
   return `
   ${topbar('Staff entry','Select your shop', true)}
   <div class="content">
-    ${SHOPS.map(s=>`<button class="btn btn-outline" onclick="navTo('staffPin',{shopId:'${s.id}'})">${esc(s.name)}</button>`).join('')}
+    ${SHOPS.map(s=>`<button class="btn btn-outline" onclick="navTo('staffPicker',{shopId:'${s.id}'})">${esc(s.name)}</button>`).join('')}
   </div>`;
 }
 
-function screenStaffPin(){
-  return `
-  ${topbar(shopName(S.shopId), 'Enter shop code', true)}
-  <div class="content">
-    <div class="field">
-      <label>4-digit shop code</label>
-      <input type="tel" inputmode="numeric" id="pinInput" maxlength="4" placeholder="- - - -" style="letter-spacing:8px;font-size:24px;text-align:center;" autofocus>
-    </div>
-    <div id="pinErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="submitShopPin()">Continue</button>
-  </div>`;
-}
-async function submitShopPin(){
-  const val = document.getElementById('pinInput').value.trim();
-  const correct = (CONFIG.pins[S.shopId] || DEFAULT_PINS[S.shopId]);
-  if(val === correct){
-    await loadShopData(S.shopId);
-    if(S.staffName){ navTo('staffMenu'); }
-    else { navTo('staffName'); }
-  } else {
-    document.getElementById('pinErr').innerHTML = '<div class="err">That code is not correct. Ask your manager for the shop code.</div>';
+let STAFF_PICKER_LOADING = false;
+function screenStaffPicker(){
+  if(!STAFF_LIST_CACHE[S.shopId] && !STAFF_PICKER_LOADING){
+    STAFF_PICKER_LOADING = true;
+    loadStaffList(S.shopId).then(()=>{ STAFF_PICKER_LOADING = false; render(); });
   }
-}
-
-function screenStaffName(){
+  const list = STAFF_LIST_CACHE[S.shopId];
   return `
   ${topbar(shopName(S.shopId), 'Who is entering today?', true)}
   <div class="content">
-    <div class="field">
-      <label>Your name</label>
-      <input type="text" id="nameInput" placeholder="e.g. Tendai">
-    </div>
-    <div id="nameErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="submitStaffName()">Continue</button>
+    ${!list ? `<p class="lead">Loading staff list...</p>` :
+      list.length===0 ? `<div class="empty">No staff set up for this shop yet. Ask the owner to add you under Settings.</div>` :
+      list.map(s=>`<button class="btn btn-outline" onclick="navTo('staffPinEntry',{pendingStaffId:'${esc(s.id)}',pendingStaffName:'${esc(s.name)}'})">${esc(s.name)}</button>`).join('')}
   </div>`;
 }
-function submitStaffName(){
-  const val = document.getElementById('nameInput').value.trim();
-  if(!val){ document.getElementById('nameErr').innerHTML = '<div class="err">Enter your name to continue.</div>'; return; }
-  S.staffName = val;
-  navTo('staffMenu');
+async function loadStaffList(shopId){
+  if(!sb){ SB_UNREACHABLE = true; STAFF_LIST_CACHE[shopId] = STAFF_LIST_CACHE[shopId] || []; return STAFF_LIST_CACHE[shopId]; }
+  try{
+    const { data, error } = await sb.from('staff').select('id,name').eq('shop_id', shopId).eq('active', true).order('name');
+    if(error) throw error;
+    STAFF_LIST_CACHE[shopId] = data || [];
+    (data||[]).forEach(s=>{ STAFF_NAME_INDEX[s.id] = s.name; });
+    SB_UNREACHABLE = false;
+  }catch(e){
+    STAFF_LIST_CACHE[shopId] = STAFF_LIST_CACHE[shopId] || [];
+    SB_UNREACHABLE = true;
+  }
+  return STAFF_LIST_CACHE[shopId];
 }
 
-// Unfinished tasks this shop's staff can jump straight back into.
-function staffPickupCards(data, shopId){
-  const cards = [];
-  const today = todayStr();
-  const bd = getBizDay(data, today);
-  const dayOpen = isDayOpen(data, today);
-  const eodDone = !!data.dailyLogs.find(l=>l.date===today);
-  if(dayOpen && !eodDone){
-    cards.push({
-      title: 'Finish end of day',
-      sub: 'Day opened by '+(bd?bd.openedBy:'-')+' at '+(bd?timeOfDay(bd.openedAt):'-')+'. Count phones and cash to close out today.',
-      onclick: "navTo('eod')"
-    });
-  }
-  const draft = data.draftReceiving;
-  if(draft && draft.lines && draft.lines.length){
-    const totalPcs = draft.lines.reduce((a,l)=>a+l.qty,0);
-    cards.push({
-      title: 'Finish receiving stock',
-      sub: totalPcs+' phone(s) across '+draft.lines.length+' item(s) added by '+(draft.startedBy||'-')+', not saved to stock yet.',
-      onclick: "navTo('receive')"
-    });
-  }
-  return cards;
+function screenStaffPinEntry(){
+  return `
+  ${topbar(S.pendingStaffName, 'Enter your personal PIN', true)}
+  <div class="content">
+    <div class="field">
+      <label>Your PIN</label>
+      <input type="tel" inputmode="numeric" id="pinInput" maxlength="8" placeholder="- - - -" style="letter-spacing:8px;font-size:24px;text-align:center;" autofocus>
+    </div>
+    <div id="pinErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitStaffPin()">Continue</button>
+  </div>`;
 }
+async function submitStaffPin(){
+  const val = document.getElementById('pinInput').value.trim();
+  if(!val){ document.getElementById('pinErr').innerHTML = '<div class="err">Enter your PIN.</div>'; return; }
+  if(!sb){ document.getElementById('pinErr').innerHTML = "<div class=\"err\">Can't reach the shared database right now. Check your internet and try again.</div>"; return; }
+  try{
+    const { data, error } = await sb.rpc('staff_login', {p_staff_id: S.pendingStaffId, p_pin: val});
+    if(error) throw error;
+    if(!data || data.length===0){
+      document.getElementById('pinErr').innerHTML = '<div class="err">That PIN is not correct.</div>';
+      return;
+    }
+    S.staffId = data[0].id;
+    S.staffName = data[0].name;
+    await loadShopData(S.shopId);
+    navTo('staffMenu');
+  }catch(e){
+    document.getElementById('pinErr').innerHTML = "<div class=\"err\">Could not check your PIN. Check your internet and try again.</div>";
+  }
+}
+
 function screenStaffMenu(){
   const data = SHOP_CACHE[S.shopId] || emptyShopData();
   const today = todayStr();
@@ -743,7 +833,6 @@ function screenStaffMenu(){
   return `
   ${topbar(shopName(S.shopId), 'Signed in as ' + S.staffName, true)}
   <div class="content">
-    ${renderPickupSection(staffPickupCards(data, S.shopId))}
     ${statusBanner}
     <div class="stat-grid">
       <div class="stat"><div class="label">Phones in stock</div><div class="value">${inStockCount}</div></div>
@@ -754,7 +843,7 @@ function screenStaffMenu(){
     <button class="btn btn-outline" onclick="navTo('stockSheet',{sheetShop:S.shopId,sheetDate:todayStr(),sheetAdmin:false})">Daily stock sheet (print)</button>
     ${actionButtons}
     <div style="margin-top:18px;text-align:center;">
-      <button class="link-btn" onclick="S.staffName=null;navTo('staffName')">Not ${esc(S.staffName)}? Change name</button>
+      <button class="link-btn" onclick="S.staffName=null;S.staffId=null;navTo('staffPicker')">Not ${esc(S.staffName)}? Change name</button>
     </div>
   </div>`;
 }
@@ -762,23 +851,14 @@ async function closeBizDayAction(){
   const ok = await askConfirm("Close today's business day? You will not be able to add more entries for today unless the day is opened again.", 'Yes, close the day', false);
   if(!ok) return;
   const date = todayStr();
-  const who = S.staffName;
-  await mutateShop(S.shopId, data => {
-    const b = getBizDay(data, date);
-    if(!b) return;
-    b.status = 'closed';
-    b.closedBy = who;
-    b.closedAt = Date.now();
-    b.closingStock = data.inventory.filter(p=>p.status==='in_stock').length;
-    b.closingFaulty = data.inventory.filter(p=>p.status==='faulty').length;
-    pushActivity(null, 'eod', '', data, who+' closed business day '+date+' ('+b.closingStock+' in stock, '+b.closingFaulty+' faulty)');
-  });
+  const res = await callRpc('staff_close_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date});
+  if(res.ok) await refreshShopData(S.shopId);
   render();
 }
 async function openBizDayStaffAction(){
   const date = todayStr();
-  const who = S.staffName || 'staff';
-  await mutateShop(S.shopId, data => reopenDay(data, date, who));
+  const res = await callRpc('staff_open_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date});
+  if(res.ok) await refreshShopData(S.shopId);
   render();
 }
 function screenStaffDash(){
@@ -799,12 +879,21 @@ function screenStaffDash(){
   const faultyList = data.inventory.filter(p=>p.status==='faulty').sort((a,b)=>(b.returnedTs||0)-(a.returnedTs||0));
   const recentSales = data.inventory.filter(p=>p.status==='sold').sort((a,b)=>(b.dateSold||'').localeCompare(a.dateSold||'')).slice(0,10);
   const recentReturns = data.inventory.filter(p=>p.dateReturned).sort((a,b)=>(b.dateReturned||'').localeCompare(a.dateReturned||'')).slice(0,10);
-  const recentReceiving = data.activity.filter(a=>a.type==='receive').slice(0,10);
+  const recentReceiving = data.activity.filter(a=>a.type==='received').slice(0,10);
 
   return `
   ${topbar(shopName(S.shopId), 'Shop dashboard', true)}
   <div class="content">
     ${refreshRow()}
+    <div class="print-only sheet-head" style="margin-bottom:16px;">
+      <div>
+        <div class="biz">TOWDAH ELECTRONICS</div>
+        <div class="meta">Shop dashboard &middot; ${esc(shopName(S.shopId))}</div>
+      </div>
+      <div class="meta" style="text-align:right;">Printed: ${esc(nowLabel())}</div>
+    </div>
+    <button class="btn btn-amber btn-full-center no-print" onclick="window.print()">Print this dashboard</button>
+    <div style="font-size:12px;color:var(--text-faint);margin-bottom:14px;" class="no-print">Prints stock levels, the faulty shelf, and recent activity below - handy for a quick paper check or to hand to the owner.</div>
     ${lowCount>0 ? `<div class="warn-banner">${lowCount} model(s) are running low and may need a re-up.</div>` : ''}
     ${faultyList.length>0 ? `<div class="section-flag">${faultyList.length} phone(s) on the faulty shelf - not for sale.</div>` : ''}
     <h2>Stock levels</h2>
@@ -922,27 +1011,12 @@ async function confirmSale(){
   const num = parseFloat(val);
   if(!val || isNaN(num) || num<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter a valid sale price.</div>'; return; }
   const phoneId = selectedPhone.id;
-  const who = S.staffName;
-  const res = await mutateShop(S.shopId, data => {
-    const p = data.inventory.find(x=>x.id===phoneId);
-    if(!p) return {error:'This phone is no longer on the system. Ask the owner to check.'};
-    if(p.status !== 'in_stock') return {error:'This phone is no longer available for sale. Go back and pick it from the list again.'};
-    p.status = 'sold';
-    p.salePrice = num;
-    p.soldBy = who;
-    p.dateSold = todayStr();
-    p.soldTs = Date.now();
-    const list = p.listPrice;
-    if(list && num < list){ p.belowPrice = true; p.priceShortfall = Math.round((list - num)*100)/100; }
-    else { p.belowPrice = false; p.priceShortfall = 0; }
-    pushLedger(data, {type:'sold', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, price:num, by:who, belowPrice:!!p.belowPrice, shortfall:p.priceShortfall||0});
-    pushActivity(null, 'sale', '', data, who+' sold '+p.model+' ('+p.imei+') for '+money(num));
-    return {ok:true};
-  });
-  if(res && res.error){
+  const res = await callRpc('staff_sell_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_price: num});
+  if(!res.ok){
     document.getElementById('priceErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
     return;
   }
+  await refreshShopData(S.shopId);
   selectedPhone = null;
   showSuccessThen('Sale recorded.', 'staffMenu');
 }
@@ -1018,24 +1092,16 @@ async function confirmReturn(){
   if(!S.returnReason){ document.getElementById('returnErr').innerHTML = '<div class="err">Pick a reason for the return.</div>'; return; }
   if(S.returnReason==='Faulty' && (!S.returnFaultParts || S.returnFaultParts.length===0)){ document.getElementById('returnErr').innerHTML = '<div class="err">Select at least one faulty part.</div>'; return; }
   const phoneId = selectedPhone.id;
-  const who = S.staffName;
   const reason = S.returnReason;
   const parts = reason==='Faulty' ? (S.returnFaultParts||[]) : null;
   const notes = S.returnNotes || null;
   const isFaulty = reason === 'Faulty';
-  await mutateShop(S.shopId, data => {
-    const p = data.inventory.find(x=>x.id===phoneId);
-    if(!p) return;
-    p.status = isFaulty ? 'faulty' : 'in_stock';
-    p.returnReason = reason;
-    p.faultParts = parts;
-    p.returnNotes = notes;
-    p.dateReturned = todayStr();
-    p.returnedTs = Date.now();
-    const faultText = (parts && parts.length) ? ' - faults: '+parts.join(', ') : '';
-    pushLedger(data, {type:'returned', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, reason:reason, faultParts:parts, notes:notes, by:who, toFaulty:isFaulty});
-    pushActivity(null, 'return', '', data, who+' logged a return: '+p.model+' ('+p.imei+') - '+reason+faultText+(isFaulty?' [moved to faulty shelf]':''));
-  });
+  const res = await callRpc('staff_return_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes});
+  if(!res.ok){
+    document.getElementById('returnErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+    return;
+  }
+  await refreshShopData(S.shopId);
   selectedPhone = null;
   S.returnFaultParts = null;
   S.returnNotes = null;
@@ -1044,14 +1110,6 @@ async function confirmReturn(){
 
 function screenReceive(){
   if(!requireOpenDay()) return dayNotOpenScreen();
-  const data = SHOP_CACHE[S.shopId] || emptyShopData();
-  // Resume an unfinished document (this device or another) automatically,
-  // so a half-done receiving doc is never quietly lost or duplicated.
-  if((!S.receiveBatch || S.receiveBatch.lines.length===0) && !S.receiveLineDraft
-     && data.draftReceiving && data.draftReceiving.lines && data.draftReceiving.lines.length){
-    S.receiveBatch = {lines: data.draftReceiving.lines.slice()};
-    S.receiveStep = 'batchSummary';
-  }
   if(!S.receiveBatch) S.receiveBatch = {lines:[]};
   const step = S.receiveStep || 'lineDetails';
   if(step === 'lineImeis') return screenReceiveLineImeis();
@@ -1060,6 +1118,7 @@ function screenReceive(){
 }
 function screenReceiveLineDetails(){
   const d = S.receiveLineDraft || {};
+  if(!d.model && !d.useManual) return screenReceiveModelPick();
   const batchCount = (S.receiveBatch && S.receiveBatch.lines.length) || 0;
   return `
   ${topbar('Stock receiving document', shopName(S.shopId) + (batchCount>0 ? ' - item '+(batchCount+1) : ''), true)}
@@ -1067,8 +1126,13 @@ function screenReceiveLineDetails(){
     ${batchCount>0 ? `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">${batchCount} item(s) already added to this document. Add another colour or model below, or finish from the batch list.</div>` : ''}
     <div class="field">
       <label>Model</label>
-      <input type="text" id="recvModel" list="modelList" placeholder="e.g. A55" value="${esc(d.model||'')}">
-      <datalist id="modelList">${COMMON_MODELS.map(m=>`<option value="${esc(m)}">`).join('')}</datalist>
+      ${d.useManual ? `
+        <input type="text" id="recvModel" placeholder="Type the model" value="${esc(d.model||'')}" autofocus>
+        <div style="margin-top:8px;"><button class="link-btn" onclick="changeModel()">Choose from list instead</button></div>
+      ` : `
+        <div class="list-item" style="cursor:default;"><div class="model">${esc(d.model)}</div></div>
+        <button class="link-btn" onclick="changeModel()">Change model</button>
+      `}
     </div>
     <div class="field">
       <label>Description (colour, storage)</label>
@@ -1083,11 +1147,78 @@ function screenReceiveLineDetails(){
     ${batchCount>0 ? `<button class="btn btn-outline btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to item list</button>` : ''}
   </div>`;
 }
+function screenReceiveModelPick(){
+  const batchCount = (S.receiveBatch && S.receiveBatch.lines.length) || 0;
+  setTimeout(()=>attachModelFilter(),0);
+  return `
+  ${topbar('Stock receiving document', shopName(S.shopId) + (batchCount>0 ? ' - item '+(batchCount+1) : ''), true)}
+  <div class="content">
+    ${batchCount>0 ? `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">${batchCount} item(s) already added to this document.</div>` : ''}
+    <h2>What model is this?</h2>
+    <div class="search-box field">
+      <label>Search</label>
+      <input type="text" id="modelSearch" placeholder="e.g. A15 or iPhone 13" autofocus>
+    </div>
+    <div id="modelPickList">
+      ${Object.keys(MODEL_CATALOG).map(brand=>`
+        <div class="model-brand" style="margin:16px 0 8px;font-weight:700;font-size:13px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.03em;">${esc(brand)}</div>
+        <div class="reason-grid">
+          ${MODEL_CATALOG[brand].map(m=>`<div class="reason-btn model-opt" data-m="${esc(m.toLowerCase())}" onclick="pickModel('${esc(m).replace(/'/g,"\\'")}')">${esc(m)}</div>`).join('')}
+        </div>`).join('')}
+    </div>
+    <div id="modelEmptyMsg" class="empty" style="display:none;">No matches. Tap "Not listed" below to type it in.</div>
+    <button class="btn btn-outline btn-full-center" style="margin-top:18px;" onclick="pickModelOther()">Not listed - type it in</button>
+    ${batchCount>0 ? `<button class="btn btn-outline btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to item list</button>` : ''}
+  </div>`;
+}
+function attachModelFilter(){
+  const input = document.getElementById('modelSearch');
+  if(!input) return;
+  input.addEventListener('input', ()=>{
+    const q = input.value.trim().toLowerCase();
+    let visible = 0;
+    document.querySelectorAll('#modelPickList .model-opt').forEach(el=>{
+      const m = el.getAttribute('data-m')||'';
+      const show = m.includes(q);
+      el.style.display = show ? '' : 'none';
+      if(show) visible++;
+    });
+    document.querySelectorAll('#modelPickList .model-brand').forEach(h=>{
+      const grid = h.nextElementSibling;
+      const anyVisible = grid && [...grid.children].some(c=>c.style.display!=='none');
+      h.style.display = anyVisible ? '' : 'none';
+      if(grid) grid.style.display = anyVisible ? '' : 'none';
+    });
+    document.getElementById('modelEmptyMsg').style.display = visible===0 ? '' : 'none';
+  });
+}
+function pickModel(m){
+  S.receiveLineDraft = Object.assign({}, S.receiveLineDraft, {model: m, useManual: false});
+  render();
+}
+function pickModelOther(){
+  S.receiveLineDraft = Object.assign({}, S.receiveLineDraft, {model: '', useManual: true});
+  render();
+}
+function changeModel(){
+  syncLineDetailsDraft();
+  S.receiveLineDraft = Object.assign({}, S.receiveLineDraft, {model: '', useManual: false});
+  render();
+}
+function syncLineDetailsDraft(){
+  const d = S.receiveLineDraft || {};
+  const descEl = document.getElementById('recvDesc');
+  const qtyEl = document.getElementById('recvQty');
+  if(descEl) d.description = descEl.value.trim();
+  if(qtyEl) d.qty = qtyEl.value.trim();
+  S.receiveLineDraft = d;
+}
 function proceedToLineImeis(){
-  const model = document.getElementById('recvModel').value.trim();
+  const d = S.receiveLineDraft || {};
+  const model = d.useManual ? document.getElementById('recvModel').value.trim() : (d.model||'').trim();
   const description = document.getElementById('recvDesc').value.trim();
   const qty = parseInt(document.getElementById('recvQty').value.trim());
-  if(!model){ document.getElementById('recvErr').innerHTML = '<div class="err">Enter the phone model.</div>'; return; }
+  if(!model){ document.getElementById('recvErr').innerHTML = '<div class="err">Select or enter the phone model.</div>'; return; }
   if(isNaN(qty) || qty<=0 || qty>200){ document.getElementById('recvErr').innerHTML = '<div class="err">Enter how many pieces (1-200).</div>'; return; }
   S.receiveLineDraft = {model, description, qty, imeis: new Array(qty).fill('')};
   S.receiveStep = 'lineImeis';
@@ -1114,7 +1245,7 @@ function screenReceiveLineImeis(){
     <button class="btn btn-primary btn-full-center" onclick="confirmLine()">Add this item to the document</button>
   </div>`;
 }
-async function confirmLine(){
+function confirmLine(){
   const d = S.receiveLineDraft;
   const inputs = [...document.querySelectorAll('.imeiRow')];
   const imeis = inputs.map(inp=>inp.value.trim());
@@ -1127,21 +1258,6 @@ async function confirmLine(){
   S.receiveBatch.lines.push({batchId: genBatchId(), model: d.model, description: d.description, qty: d.qty, imeis});
   S.receiveLineDraft = null;
   S.receiveStep = 'batchSummary';
-  // Save the in-progress document to shared storage so it isn't lost if the
-  // page is closed before "Finish" - this is what the home screen's
-  // "Pick up where you left off" card resumes from.
-  const shopId = S.shopId;
-  const who = S.staffName;
-  const linesSnapshot = S.receiveBatch.lines;
-  await mutateShop(shopId, sd => {
-    sd.draftReceiving = {
-      lines: linesSnapshot,
-      startedBy: (sd.draftReceiving && sd.draftReceiving.startedBy) || who,
-      startedAt: (sd.draftReceiving && sd.draftReceiving.startedAt) || Date.now(),
-      updatedBy: who,
-      updatedAt: Date.now()
-    };
-  });
   render();
 }
 function screenReceiveBatchSummary(){
@@ -1164,37 +1280,25 @@ function screenReceiveBatchSummary(){
 async function finishReceiving(){
   const lines = S.receiveBatch.lines || [];
   if(lines.length===0) return;
-  const who = S.staffName;
-  const totalAdded = await mutateShop(S.shopId, data => {
-    let n = 0;
-    const existing = new Set(data.inventory.map(p=>p.imei));
-    lines.forEach(l=>{
-      l.imeis.forEach(imei=>{
-        if(existing.has(imei)) return;
-        existing.add(imei);
-        const rec = {
-          id: genId(), imei, model: l.model, description: l.description,
-          batchId: l.batchId, costPrice: null, listPrice: null,
-          dateReceived: todayStr(), receivedTs: Date.now(), status: 'in_stock',
-          receivedBy: who,
-          salePrice:null, soldBy:null, dateSold:null, soldTs:null, returnReason:null, faultParts:null, returnNotes:null, dateReturned:null, returnedTs:null,
-          belowPrice:false, priceShortfall:0
-        };
-        data.inventory.push(rec);
-        pushLedger(data, {type:'received', phoneId:rec.id, model:rec.model, description:rec.description, imei:rec.imei, by:who, batchId:rec.batchId});
-        n++;
-      });
-    });
-    const summary = lines.map(l=>l.qty+' x '+l.model+(l.description?' ('+l.description+')':'')).join(', ');
-    pushActivity(null, 'receive', '', data, who+' received '+n+' phone(s): '+summary);
-    data.draftReceiving = null;
-    return n;
-  });
+  const items = lines.map(l => ({ model: l.model, description: l.description || '', imeis: l.imeis }));
+  const res = await callRpc('staff_receive_stock', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_items: items});
+  const app = document.getElementById('app');
+  if(!res.ok){
+    app.innerHTML = offlineBanner() + saveErrorBanner() + `
+      ${topbar(shopName(S.shopId), '', true)}
+      <div class="content">
+        <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
+        <p class="lead">Nothing in this document was saved. Nothing else here has been lost — go back, fix the item causing the problem, and try again.</p>
+        <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to this document</button>
+      </div>`;
+    return;
+  }
+  const totalAdded = res.data;
+  await refreshShopData(S.shopId);
   S.receiveBatch = {lines:[]};
   S.receiveLineDraft = null;
   S.receiveStep = 'lineDetails';
-  const app = document.getElementById('app');
-  app.innerHTML = `
+  app.innerHTML = offlineBanner() + saveErrorBanner() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
@@ -1237,46 +1341,45 @@ async function confirmEod(){
   if(isNaN(faulty) || faulty<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter how many faulty phones you counted (put 0 if none).</div>'; return; }
   if(isNaN(cash) || cash<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter the cash collected today.</div>'; return; }
   const today = todayStr();
-  const who = S.staffName;
-  await mutateShop(S.shopId, data => {
-    const idx = data.dailyLogs.findIndex(l=>l.date===today);
-    const prev = idx>=0 ? data.dailyLogs[idx] : null;
-    const entry = {date:today, physicalCount:count, faultyCount:faulty, cash:cash, submittedBy:who, timestamp:Date.now()};
-    if(prev){
-      entry.adjustments = prev.adjustments || [];
-      entry.confirmed = prev.confirmed || false;
-      entry.confirmedBy = prev.confirmedBy || null;
-      entry.confirmedAt = prev.confirmedAt || null;
-      entry.resubmitted = (prev.resubmitted||0) + 1;
-      entry.previousCounts = (prev.previousCounts||[]).concat([{physicalCount:prev.physicalCount, faultyCount:prev.faultyCount, cash:prev.cash, submittedBy:prev.submittedBy, timestamp:prev.timestamp}]);
-    }
-    if(idx>=0) data.dailyLogs[idx] = entry; else data.dailyLogs.push(entry);
-    pushLedger(data, {type:'eod', by:who, note:'End of day: '+count+' good, '+faulty+' faulty, '+money(cash)+' cash'+(prev?' (replaced an earlier submission)':'')});
-    pushActivity(null, 'eod', '', data, who+' submitted end of day: '+count+' good phones, '+faulty+' faulty, '+money(cash)+' cash'+(prev?' (RESUBMITTED)':''));
-  });
+  const res = await callRpc('staff_submit_eod', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: today, p_physical_count: count, p_faulty_count: faulty, p_cash: cash});
+  if(!res.ok){
+    document.getElementById('eodErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+    return;
+  }
+  await refreshShopData(S.shopId);
   showSuccessThen('End of day submitted. Thank you!', 'staffMenu');
 }
 
+// Never show a green tick for something that did not save. A false confirmation is
+// how stock goes missing: staff move on believing the entry is recorded.
+function notSavedBox(what){
+  return `<div class="success-box" style="background:var(--red-bg);">
+      <div class="check">&#33;</div>
+      <div class="msg" style="color:#8E2B25;">${esc(what)} was NOT saved.</div>
+      <div style="font-size:13px;color:#8E2B25;margin-top:8px;font-weight:500;">The app could not reach the shared data. Check your internet, then open the shop dashboard to see whether it recorded before you enter it again.</div>
+    </div>`;
+}
 function showSuccessThen(msg, nextView){
   const app = document.getElementById('app');
-  app.innerHTML = `
+  const failed = !!SAVE_ERROR;
+  app.innerHTML = offlineBanner() + saveErrorBanner() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
-      <div class="success-box">
+      ${failed ? notSavedBox('That entry') : `<div class="success-box">
         <div class="check">&#10003;</div>
         <div class="msg">${esc(msg)}</div>
-      </div>
+      </div>`}
       <button class="btn btn-primary btn-full-center" onclick="go('${nextView}')">Continue</button>
     </div>`;
 }
 
 function screenAdminLogin(){
   return `
-  ${topbar('Admin login', 'Enter your admin username and password', true)}
+  ${topbar('Admin login', 'Sign in with your admin email and password', true)}
   <div class="content">
     <div class="field">
-      <label>Username</label>
-      <input type="text" id="adminUser" placeholder="e.g. owner" autocapitalize="off">
+      <label>Email</label>
+      <input type="email" id="adminEmail" placeholder="you@example.com" autocapitalize="off">
     </div>
     <div class="field">
       <label>Password</label>
@@ -1287,16 +1390,42 @@ function screenAdminLogin(){
   </div>`;
 }
 async function submitAdminLogin(){
-  const u = document.getElementById('adminUser').value.trim();
+  const email = document.getElementById('adminEmail').value.trim();
   const pw = document.getElementById('adminPass').value;
-  const admin = CONFIG.admin || DEFAULT_ADMIN;
-  if(u === admin.username && pw === admin.password){
+  if(!email || !pw){ document.getElementById('adminErr').innerHTML = '<div class="err">Enter your email and password.</div>'; return; }
+  if(!sb){ document.getElementById('adminErr').innerHTML = "<div class=\"err\">Can't reach the shared database right now. Check your internet and try again.</div>"; return; }
+  try{
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pw });
+    if(error) throw error;
+    const ok = await resolveAdminSession(data.user && data.user.id);
+    if(!ok){
+      await sb.auth.signOut();
+      document.getElementById('adminErr').innerHTML = '<div class="err">That login works, but is not set up as an admin. Ask whoever set up the database to add you.</div>';
+      return;
+    }
     await Promise.all(SHOPS.map(s=>loadShopData(s.id)));
     S.dashShop = 'all';
     navTo('ownerDash');
-  } else {
-    document.getElementById('adminErr').innerHTML = '<div class="err">That username or password is not correct.</div>';
+  } catch(e){
+    document.getElementById('adminErr').innerHTML = '<div class="err">That email or password is not correct.</div>';
   }
+}
+// Looks up whether a signed-in Supabase Auth user is registered as an admin,
+// and sets ADMIN_SESSION if so. Used both at login and to restore a session
+// that was already signed in (e.g. the page was reloaded).
+async function resolveAdminSession(userId){
+  if(!userId) return false;
+  try{
+    const { data, error } = await sb.from('admins').select('username').eq('user_id', userId).single();
+    if(error || !data) return false;
+    ADMIN_SESSION = { userId, username: data.username };
+    return true;
+  }catch(e){ return false; }
+}
+async function adminSignOut(){
+  ADMIN_SESSION = null;
+  if(sb) try{ await sb.auth.signOut(); }catch(e){}
+  navHome();
 }
 
 function shopStats(data, date){
@@ -1373,46 +1502,6 @@ function rangeStatGrid(st, labelPrefix, opts){
   ${st.belowCount ? `<div class="section-flag">${st.belowCount} sale(s) went below your set price - ${money(st.belowShortfall)} less than expected.</div>` : ''}`;
 }
 
-// Corrections/decisions only the admin can make, across all shops.
-// Capped and windowed deliberately so this never turns into an ever-growing
-// backlog of ancient history - it's a nudge, not an inbox.
-function ownerPickupCards(allData){
-  const cards = [];
-  const nowTs = Date.now();
-  const cashCutoff = daysAgoStr(UNCONFIRMED_CASH_LOOKBACK_DAYS - 1);
-  SHOPS.forEach(s=>{
-    const data = allData[s.id];
-    const pending = getPendingBatches(data);
-    if(pending.length){
-      const sorted = pending.slice().sort((a,b)=>(a.dateReceived||'').localeCompare(b.dateReceived||''));
-      const b = sorted[0];
-      const totalPending = pending.reduce((a,x)=>a+x.count,0);
-      cards.push({
-        title: 'Set prices - ' + s.name,
-        sub: totalPending+' phone(s) received, still waiting on Dubai/Zim pricing'+(pending.length>1?' ('+pending.length+' batches)':'')+'.',
-        onclick: `navTo('ownerPricing',{mgmtShop:'${s.id}',pricingBatch:'${b.batchId}'})`
-      });
-    }
-    const unconfirmed = (data.dailyLogs||[]).filter(l=>!l.confirmed && l.date>=cashCutoff).sort((a,b)=>b.date.localeCompare(a.date));
-    unconfirmed.slice(0,2).forEach(l=>{
-      cards.push({
-        title: 'Confirm cash - ' + s.name,
-        sub: money(l.cash)+' reported by '+(l.submittedBy||'staff')+' for '+l.date+'. Tap to review and confirm you have seen it.',
-        onclick: `navTo('ownerCashDetail',{mgmtShop:'${s.id}',cashDate:'${l.date}'})`
-      });
-    });
-    const agedFaulty = (data.inventory||[]).filter(p=>p.status==='faulty' && p.returnedTs && daysSince(p.returnedTs) >= AGED_FAULTY_DAYS);
-    if(agedFaulty.length){
-      const oldest = agedFaulty.slice().sort((a,b)=>(a.returnedTs||0)-(b.returnedTs||0))[0];
-      cards.push({
-        title: agedFaulty.length+' faulty phone(s) need a decision - '+s.name,
-        sub: 'Oldest: '+oldest.model+(oldest.description?' - '+oldest.description:'')+', returned '+daysSince(oldest.returnedTs)+' day(s) ago. Repair or write off.',
-        onclick: `navTo('ownerFaulty',{mgmtShop:'${s.id}'})`
-      });
-    }
-  });
-  return cards;
-}
 function screenOwnerDash(){
   const today = todayStr();
   const allData = {};
@@ -1549,7 +1638,6 @@ function screenOwnerDash(){
   return `
   ${topbar('Admin dashboard', new Date().toLocaleDateString('en-GB',{weekday:'long', day:'numeric', month:'long'}), true)}
   <div class="content">
-    ${renderPickupSection(ownerPickupCards(allData))}
     ${refreshRow()}
     ${tabsHtml}
     ${body}
@@ -1822,37 +1910,177 @@ function screenStockSheet(){
 function setSheetDate(v){ S.sheetDate = v; render(); }
 function switchDashTab(id){ S.dashShop = id; render(); }
 
+let ADMIN_STAFF_CACHE = {};
+async function loadAdminStaffList(shopId){
+  if(!sb) return [];
+  try{
+    const { data, error } = await sb.from('staff').select('id,name,active').eq('shop_id', shopId).order('name');
+    if(error) throw error;
+    ADMIN_STAFF_CACHE[shopId] = data || [];
+    SB_UNREACHABLE = false;
+  }catch(e){
+    ADMIN_STAFF_CACHE[shopId] = ADMIN_STAFF_CACHE[shopId] || [];
+    SB_UNREACHABLE = true;
+  }
+  return ADMIN_STAFF_CACHE[shopId];
+}
+let SHOP_RESET_CACHE = {};
+async function loadShopResetInfo(shopId){
+  if(!sb) return null;
+  try{
+    const { data, error } = await sb.from('shop_resets').select('wiped_by,wiped_at').eq('shop_id', shopId).order('wiped_at',{ascending:false}).limit(1);
+    if(error) throw error;
+    SHOP_RESET_CACHE[shopId] = (data && data[0]) || null;
+    SB_UNREACHABLE = false;
+  }catch(e){
+    SHOP_RESET_CACHE[shopId] = null;
+  }
+  return SHOP_RESET_CACHE[shopId];
+}
 function screenOwnerSettings(){
-  const pins = CONFIG.pins;
-  const admin = CONFIG.admin || DEFAULT_ADMIN;
+  if(S.resetPinStaff) return screenResetPin();
   const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
+  const shopId = S.settingsShop || SHOPS[0].id;
+  if(!ADMIN_STAFF_CACHE[shopId] && !S.settingsLoading){
+    S.settingsLoading = true;
+    loadAdminStaffList(shopId).then(()=>{ S.settingsLoading = false; render(); });
+  }
+  if(SHOP_RESET_CACHE[shopId]===undefined && !S.resetInfoLoading){
+    S.resetInfoLoading = true;
+    loadShopResetInfo(shopId).then(()=>{ S.resetInfoLoading = false; render(); });
+  }
+  const list = ADMIN_STAFF_CACHE[shopId];
+  const lastReset = SHOP_RESET_CACHE[shopId];
   return `
-  ${topbar('Settings', 'Codes, login and alerts', true)}
+  ${topbar('Settings', 'Staff logins and alerts', true)}
   <div class="content">
-    <h2>Shop codes</h2>
-    ${SHOPS.map(s=>`
-      <div class="field">
-        <label>${esc(s.name)} code</label>
-        <input type="tel" inputmode="numeric" maxlength="6" id="pinset_${s.id}" value="${esc(pins[s.id]||'')}">
-      </div>
-    `).join('')}
-    <h2>Admin login</h2>
-    <div class="field">
-      <label>Admin username</label>
-      <input type="text" id="adminUserSet" value="${esc(admin.username||'')}" autocapitalize="off">
+    <h2>Staff</h2>
+    <div class="tabs">
+      ${SHOPS.map(s=>`<div class="tab ${shopId===s.id?'active':''}" onclick="S.settingsShop='${s.id}';render();">${esc(s.name)}</div>`).join('')}
     </div>
-    <div class="field">
-      <label>Admin password</label>
-      <input type="text" id="adminPassSet" value="${esc(admin.password||'')}">
-    </div>
+    ${!list ? '<p class="lead">Loading...</p>' : (list.length===0 ? '<div class="card"><div class="empty">No staff added for this shop yet.</div></div>' : list.map(s=>`
+      <div class="list-item" style="cursor:default;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="model">${esc(s.name)}</div>
+          ${s.active ? '<span class="chip chip-green">Active</span>' : '<span class="chip chip-gray">Deactivated</span>'}
+        </div>
+        <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
+          <button class="link-btn" onclick="S.resetPinStaff={id:'${esc(s.id)}',name:'${esc(s.name)}'};render();">Reset PIN</button>
+          ${s.active ? `<button class="link-btn" style="color:var(--red);" onclick="deactivateStaff('${esc(s.id)}','${esc(s.name)}')">Deactivate</button>` : ''}
+        </div>
+      </div>`).join(''))}
+
+    <h2>Add staff to ${esc(shopName(shopId))}</h2>
+    <div class="field"><label>Name</label><input type="text" id="newStaffName" placeholder="e.g. Tendai"></div>
+    <div class="field"><label>Personal PIN (4+ digits &mdash; they'll use it to sign in)</label><input type="tel" inputmode="numeric" id="newStaffPin" placeholder="e.g. 4821"></div>
+    <div id="staffErr"></div>
+    <button class="btn btn-outline btn-full-center" onclick="addStaff('${shopId}')">Add staff member</button>
+
     <h2>Stock alerts</h2>
     <div class="field">
       <label>Flag a model as low stock when quantity is at or below</label>
       <input type="tel" inputmode="numeric" id="lowStockSet" value="${threshold}">
     </div>
     <div id="settingsErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="saveSettings()">Save settings</button>
+    <button class="btn btn-primary btn-full-center" onclick="saveSettings()">Save low stock alert</button>
+
+    <h2 style="color:var(--red);">Danger zone</h2>
+    <div class="card" style="border-color:var(--red);">
+      <div style="font-size:13px;color:var(--text-soft);margin-bottom:10px;">Permanently clear all stock, sales, faulty-shelf and end-of-day records for ${esc(shopName(shopId))}. Use this to remove test/demo entries before a client sees the app, or any time you want a clean slate for this shop. Staff logins and the other shops are not touched.</div>
+      ${lastReset ? `<div style="font-size:12px;color:var(--text-faint);margin-bottom:10px;">Last cleared: ${esc(fmtDateTime(lastReset.wiped_at))} by ${esc(lastReset.wiped_by)}</div>` : ''}
+      <button class="btn btn-full-center" style="background:var(--red);color:#fff;" onclick="navTo('wipeShop',{wipeShopId:'${shopId}'})">Clear all data for this shop</button>
+    </div>
+
+    <div style="margin-top:24px;text-align:center;">
+      <button class="link-btn" style="color:var(--red);" onclick="adminSignOut()">Log out</button>
+    </div>
   </div>`;
+}
+function fmtDateTime(iso){
+  const d = new Date(iso);
+  return d.toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+function screenWipeShop(){
+  const shopId = S.wipeShopId;
+  const name = shopName(shopId);
+  setTimeout(()=>attachWipeConfirmWatcher(name),0);
+  return `
+  ${topbar('Clear shop data', name, true)}
+  <div class="content">
+    <div class="alert-banner">This permanently deletes ALL stock, sales, faulty-shelf and end-of-day history for ${esc(name)}. This cannot be undone.</div>
+    <p class="lead">Staff logins and the other shops are not affected.</p>
+    <div class="field">
+      <label>Type the shop name exactly to unlock the button: <strong>${esc(name)}</strong></label>
+      <input type="text" id="wipeConfirmInput" placeholder="${esc(name)}" autocomplete="off" autocapitalize="off">
+    </div>
+    <div id="wipeErr"></div>
+    <button class="btn btn-full-center" id="wipeConfirmBtn" style="background:var(--red);color:#fff;opacity:.45;pointer-events:none;" onclick="confirmWipeShop('${esc(shopId)}','${esc(name).replace(/'/g,"\\'")}')">Yes, permanently clear ${esc(name)}</button>
+    <button class="btn btn-outline btn-full-center" onclick="S.wipeShopId=null;navBack();">Cancel</button>
+  </div>`;
+}
+function attachWipeConfirmWatcher(name){
+  const input = document.getElementById('wipeConfirmInput');
+  const btn = document.getElementById('wipeConfirmBtn');
+  if(!input || !btn) return;
+  input.addEventListener('input', ()=>{
+    const match = input.value.trim() === name;
+    btn.style.opacity = match ? '1' : '.45';
+    btn.style.pointerEvents = match ? 'auto' : 'none';
+  });
+}
+async function confirmWipeShop(shopId, name){
+  const input = document.getElementById('wipeConfirmInput');
+  if(!input || input.value.trim() !== name) return;
+  if(!await askConfirm('Really clear ALL data for '+name+'? There is no undo.', 'Yes, clear it permanently')) return;
+  const res = await callRpc('admin_wipe_shop_data', {p_shop_id: shopId});
+  if(!res.ok){
+    const el = document.getElementById('wipeErr');
+    if(el) el.innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+    return;
+  }
+  delete SHOP_RESET_CACHE[shopId];
+  await refreshShopData(shopId);
+  const c = res.data || {};
+  await askAlert(name+' cleared: '+(c.phones||0)+' phone(s), '+(c.dailyLogs||0)+' day log(s), '+(c.businessDays||0)+' business day(s) removed.');
+  go('ownerSettings', {settingsShop: shopId});
+}
+function screenResetPin(){
+  const target = S.resetPinStaff;
+  return `
+  ${topbar('Reset PIN', target.name, true)}
+  <div class="content">
+    <div class="field"><label>New PIN for ${esc(target.name)} (4+ digits)</label><input type="tel" inputmode="numeric" id="resetPinInput" placeholder="e.g. 4821" autofocus></div>
+    <div id="resetPinErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitResetPin()">Save new PIN</button>
+    <button class="btn btn-outline btn-full-center" onclick="S.resetPinStaff=null;render();">Cancel</button>
+  </div>`;
+}
+async function submitResetPin(){
+  const pin = document.getElementById('resetPinInput').value.trim();
+  if(!pin || pin.length<4){ document.getElementById('resetPinErr').innerHTML = '<div class="err">PIN needs at least 4 digits.</div>'; return; }
+  const res = await callRpc('admin_reset_staff_pin', {p_staff_id: S.resetPinStaff.id, p_new_pin: pin});
+  if(!res.ok){ document.getElementById('resetPinErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>'; return; }
+  S.resetPinStaff = null;
+  render();
+}
+async function addStaff(shopId){
+  const name = document.getElementById('newStaffName').value.trim();
+  const pin = document.getElementById('newStaffPin').value.trim();
+  if(!name){ document.getElementById('staffErr').innerHTML = '<div class="err">Enter the staff member\'s name.</div>'; return; }
+  if(!pin || pin.length<4){ document.getElementById('staffErr').innerHTML = '<div class="err">PIN needs at least 4 digits.</div>'; return; }
+  const res = await callRpc('admin_set_staff_pin', {p_shop_id: shopId, p_name: name, p_pin: pin});
+  if(!res.ok){ document.getElementById('staffErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>'; return; }
+  delete ADMIN_STAFF_CACHE[shopId];
+  delete STAFF_LIST_CACHE[shopId];
+  render();
+}
+async function deactivateStaff(staffId, name){
+  if(!await askConfirm('Deactivate '+name+'? They will no longer be able to sign in.', 'Yes, deactivate')) return;
+  const res = await callRpc('admin_deactivate_staff', {p_staff_id: staffId});
+  const shopId = S.settingsShop || SHOPS[0].id;
+  if(res.ok){ delete ADMIN_STAFF_CACHE[shopId]; delete STAFF_LIST_CACHE[shopId]; }
+  else await askAlert(res.error);
+  render();
 }
 
 function screenOwnerManage(){
@@ -1917,76 +2145,37 @@ function renderManageRow(p){
     <div style="margin-top:8px;font-size:13px;">${actionBtns}</div>
   </div>`;
 }
-function adminName(){ return (CONFIG.admin && CONFIG.admin.username) || 'admin'; }
+function adminName(){ return (ADMIN_SESSION && ADMIN_SESSION.username) || 'admin'; }
+async function adminAction(rpcName, params){
+  const res = await callRpc(rpcName, params);
+  if(res.ok) await refreshShopData(S.mgmtShop);
+  else await askAlert(res.error);
+  render();
+  return res;
+}
 async function undoSale(phoneId){
   if(!await askConfirm('Undo this sale? The phone goes back into stock and the money comes off today’s revenue.', 'Yes, undo the sale')) return;
-  const shopId = S.mgmtShop;
-  await mutateShop(shopId, data => {
-    const p = data.inventory.find(x=>x.id===phoneId);
-    if(!p) return;
-    pushLedger(data, {type:'undo_sale', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, price:p.salePrice, by:adminName(), note:'Sale undone by admin (was sold by '+(p.soldBy||'-')+' on '+(p.dateSold||'-')+')'});
-    p.status='in_stock'; p.salePrice=null; p.soldBy=null; p.dateSold=null; p.soldTs=null; p.belowPrice=false; p.priceShortfall=0;
-    pushActivity(null, 'edit', '', data, 'Sale undone by admin: '+p.model+' ('+p.imei+')');
-  });
-  render();
+  await adminAction('admin_undo_sale', {p_phone_id: phoneId});
 }
 async function undoReturn(phoneId){
   if(!await askConfirm('Undo this return? The phone goes back to being sold.', 'Yes, undo the return')) return;
-  const shopId = S.mgmtShop;
-  await mutateShop(shopId, data => {
-    const p = data.inventory.find(x=>x.id===phoneId);
-    if(!p) return;
-    pushLedger(data, {type:'undo_return', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, reason:p.returnReason, by:adminName(), note:'Return undone by admin'});
-    p.status='sold'; p.returnReason=null; p.dateReturned=null; p.returnedTs=null; p.faultParts=null; p.returnNotes=null;
-    pushActivity(null, 'edit', '', data, 'Return undone by admin: '+p.model+' ('+p.imei+')');
-  });
-  render();
+  await adminAction('admin_undo_return', {p_phone_id: phoneId});
 }
 async function markRepaired(phoneId){
   if(!await askConfirm('Mark this phone repaired and put it back into sellable stock?', 'Yes, back to stock', false)) return;
-  const shopId = S.mgmtShop;
-  await mutateShop(shopId, data => {
-    const p = data.inventory.find(x=>x.id===phoneId);
-    if(!p) return;
-    pushLedger(data, {type:'repaired', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, faultParts:p.faultParts, by:adminName(), note:'Repaired, returned to sellable stock'});
-    p.status='in_stock'; p.repairedAt = Date.now(); p.repairedBy = adminName();
-    p.salePrice=null; p.dateSold=null; p.soldTs=null; p.soldBy=null; p.belowPrice=false; p.priceShortfall=0;
-    pushActivity(null, 'edit', '', data, 'Repaired and back in stock: '+p.model+' ('+p.imei+')');
-  });
-  render();
+  await adminAction('admin_mark_repaired', {p_phone_id: phoneId});
 }
 async function writeOffPhone(phoneId){
   if(!await askConfirm('Write this phone off as a total loss? It leaves stock completely and is recorded as a loss.', 'Yes, write it off')) return;
-  const shopId = S.mgmtShop;
-  await mutateShop(shopId, data => {
-    const p = data.inventory.find(x=>x.id===phoneId);
-    if(!p) return;
-    pushLedger(data, {type:'written_off', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, faultParts:p.faultParts, price:p.costPrice, by:adminName(), note:'Written off as a loss'});
-    p.status='written_off'; p.writtenOffAt = Date.now(); p.writtenOffBy = adminName(); p.dateWrittenOff = todayStr();
-    pushActivity(null, 'edit', '', data, 'Written off: '+p.model+' ('+p.imei+')');
-  });
-  render();
+  await adminAction('admin_write_off', {p_phone_id: phoneId});
 }
 async function deletePhone(phoneId){
   if(!await askConfirm('Delete this phone entry completely? This cannot be undone.', 'Yes, delete it')) return;
-  const shopId = S.mgmtShop;
-  await mutateShop(shopId, data => {
-    const p = data.inventory.find(x=>x.id===phoneId);
-    if(p) pushLedger(data, {type:'deleted', phoneId:p.id, model:p.model, description:p.description, imei:p.imei, by:adminName(), note:'Stock entry deleted by admin'});
-    data.inventory = data.inventory.filter(x=>x.id!==phoneId);
-    pushActivity(null, 'edit', '', data, 'Entry deleted by admin: '+(p?p.model:'')+' ('+(p?p.imei:'')+')');
-  });
-  render();
+  await adminAction('admin_delete_phone', {p_phone_id: phoneId});
 }
 async function deleteLog(date){
   if(!await askConfirm('Delete the end of day log for '+date+'?', 'Yes, delete the log')) return;
-  const shopId = S.mgmtShop;
-  await mutateShop(shopId, data => {
-    pushLedger(data, {type:'deleted_eod', by:adminName(), note:'End of day log for '+date+' deleted by admin'});
-    data.dailyLogs = data.dailyLogs.filter(l=>l.date!==date);
-    pushActivity(null, 'edit', '', data, 'End of day log deleted for '+date);
-  });
-  render();
+  await adminAction('admin_delete_log', {p_shop_id: S.mgmtShop, p_date: date});
 }
 // The ledger is append-only: history survives even if a phone is re-sold,
 // a sale is undone, or an entry is deleted.
@@ -2129,16 +2318,7 @@ function screenOwnerCashDetail(){
   </div>`;
 }
 async function confirmCash(date){
-  await mutateShop(S.mgmtShop, data => {
-    const log = data.dailyLogs.find(l=>l.date===date);
-    if(!log) return;
-    log.confirmed = true;
-    log.confirmedBy = adminName();
-    log.confirmedAt = Date.now();
-    pushLedger(data, {type:'cash_confirmed', by:adminName(), note:'Confirmed cash seen for '+date+': '+money(log.cash)});
-    pushActivity(null, 'edit', '', data, 'Admin confirmed cash seen for '+date+' ('+money(log.cash)+')');
-  });
-  render();
+  await adminAction('admin_confirm_cash', {p_shop_id: S.mgmtShop, p_date: date});
 }
 async function addCashAdjustment(date){
   const amtRaw = document.getElementById('adjAmount').value.trim();
@@ -2146,15 +2326,7 @@ async function addCashAdjustment(date){
   const amt = parseFloat(amtRaw);
   if(isNaN(amt) || amt===0){ document.getElementById('adjErr').innerHTML = '<div class="err">Enter a non-zero amount.</div>'; return; }
   if(!reason){ document.getElementById('adjErr').innerHTML = '<div class="err">Enter a reason for this adjustment.</div>'; return; }
-  await mutateShop(S.mgmtShop, data => {
-    const log = data.dailyLogs.find(l=>l.date===date);
-    if(!log) return;
-    if(!log.adjustments) log.adjustments = [];
-    log.adjustments.push({amount:amt, reason, ts:Date.now(), by:adminName()});
-    pushLedger(data, {type:'cash_adjustment', by:adminName(), price:amt, note:'Cash adjustment on '+date+': '+(amt>=0?'+':'')+money(amt)+' - '+reason});
-    pushActivity(null, 'edit', '', data, 'Cash adjustment on '+date+': '+(amt>=0?'+':'')+money(amt)+' - '+reason);
-  });
-  render();
+  await adminAction('admin_cash_adjustment', {p_shop_id: S.mgmtShop, p_date: date, p_amount: amt, p_reason: reason});
 }
 
 function getPendingBatches(data){
@@ -2225,23 +2397,8 @@ async function savePricingBatch(batchId){
   const zim = parseFloat(document.getElementById('priceZim').value.trim());
   if(isNaN(dubai) || dubai<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter the Dubai price.</div>'; return; }
   if(isNaN(zim) || zim<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter the Zim price.</div>'; return; }
-  await mutateShop(S.mgmtShop, data => {
-    let count = 0;
-    let model = '';
-    data.inventory.forEach(p=>{
-      if(p.batchId===batchId){
-        p.costPrice=dubai; p.listPrice=zim; count++; model = p.model;
-        if(p.status==='sold' && p.salePrice!==null && p.salePrice!==undefined){
-          if(p.salePrice < zim){ p.belowPrice = true; p.priceShortfall = Math.round((zim - p.salePrice)*100)/100; }
-          else { p.belowPrice = false; p.priceShortfall = 0; }
-        }
-      }
-    });
-    pushLedger(data, {type:'price_set', by:adminName(), batchId:batchId, model:model, note:'Prices set for '+count+' phone(s): Dubai '+money(dubai)+' / Zim '+money(zim)});
-    pushActivity(null, 'edit', '', data, 'Admin set pricing for '+count+' phone(s) ('+money(dubai)+' / '+money(zim)+')');
-  });
-  S.pricingBatch = null;
-  render();
+  const res = await adminAction('admin_set_pricing_batch', {p_shop_id: S.mgmtShop, p_batch_id: batchId, p_cost: dubai, p_list: zim});
+  if(res.ok) S.pricingBatch = null;
 }
 
 function screenOwnerDayReport(){
@@ -2309,27 +2466,15 @@ function screenOwnerDayReport(){
 function setReportDate(val){ S.reportDate = val; render(); }
 
 async function saveSettings(){
-  const newPins = {};
-  for(const s of SHOPS){
-    const v = document.getElementById('pinset_'+s.id).value.trim();
-    if(!v || v.length<4){ document.getElementById('settingsErr').innerHTML = '<div class="err">Each shop code needs at least 4 digits.</div>'; return; }
-    newPins[s.id] = v;
-  }
-  const username = document.getElementById('adminUserSet').value.trim();
-  const password = document.getElementById('adminPassSet').value;
   const threshold = parseInt(document.getElementById('lowStockSet').value.trim());
-  if(!username){ document.getElementById('settingsErr').innerHTML = '<div class="err">Enter an admin username.</div>'; return; }
-  if(!password || password.length<4){ document.getElementById('settingsErr').innerHTML = '<div class="err">Admin password needs at least 4 characters.</div>'; return; }
   if(isNaN(threshold) || threshold<0){ document.getElementById('settingsErr').innerHTML = '<div class="err">Enter a valid low stock number.</div>'; return; }
-  CONFIG.pins = newPins;
-  CONFIG.admin = {username, password};
-  CONFIG.lowStockThreshold = threshold;
-  await saveConfig();
+  const ok = await saveLowStockThreshold(threshold);
+  if(!ok){ document.getElementById('settingsErr').innerHTML = '<div class="err">'+esc(SAVE_ERROR)+'</div>'; return; }
   showSuccessThenGeneric('Settings updated.', 'ownerDash');
 }
 function showSuccessThenGeneric(msg, nextView){
   const app = document.getElementById('app');
-  app.innerHTML = `
+  app.innerHTML = offlineBanner() + saveErrorBanner() + `
     ${topbar('Admin dashboard','',false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${esc(msg)}</div></div>
@@ -2338,16 +2483,36 @@ function showSuccessThenGeneric(msg, nextView){
 }
 
 async function init(){
-  document.getElementById('app').innerHTML = `<div class="content"><p class="lead">Loading...</p></div>`;
   try{
-    await loadConfig();
+    document.getElementById('app').innerHTML = `<div class="content"><p class="lead">Loading...</p></div>`;
+    // Tests inject window.__SB_OVERRIDE__ before this script runs, so nothing
+    // here ever needs the real internet or the owner's real data to be tested.
+    if(window.__SB_OVERRIDE__){
+      sb = window.__SB_OVERRIDE__;
+    } else if(window.supabase && typeof window.supabase.createClient === 'function'){
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    } else {
+      sb = null;
+    }
+    if(sb){
+      try{
+        const { data } = await sb.auth.getSession();
+        const userId = data && data.session && data.session.user && data.session.user.id;
+        if(userId) await resolveAdminSession(userId);
+      }catch(e){ /* no existing session to restore - carry on signed out */ }
+    }
+    await loadSettings();
+    render();
+    startPolling();
   }catch(e){
-    // Last-resort safety net: the app must never sit on "Loading..." forever.
-    CONFIG = { pins: {...DEFAULT_PINS}, admin: {...DEFAULT_ADMIN}, lowStockThreshold: DEFAULT_LOW_STOCK };
+    showFatal(e);
   }
-  render();
-  startPolling();
 }
+window.addEventListener('error', function(ev){
+  if(document.getElementById('app') && /Loading\.\.\./.test(document.getElementById('app').innerText||'')){
+    showFatal(ev.error || ev.message);
+  }
+});
 init();
 </script>
 </body>
