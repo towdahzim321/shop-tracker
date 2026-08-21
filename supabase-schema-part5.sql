@@ -23,9 +23,12 @@
 -- copy existing values into it.
 --
 -- WHAT THIS ADDS OR CHANGES
---   shops        — new table. Seeded with the three existing shops, keeping
---                  their exact current ids (harare, bulawayo1, bulawayo2) so
---                  every existing phone, ledger and day row still matches.
+--   shops        — ALREADY EXISTED (id, name only) before this file - see
+--                  judgment call 3 below. Gains active/sort_order columns
+--                  and a primary key check; reconciled (not re-created) with
+--                  the three existing rows, keeping their exact current ids
+--                  (harare, bulawayo1, bulawayo2) so every existing phone,
+--                  ledger and day row still matches.
 --   models       — new table. Seeded from the app's built-in model list PLUS
 --                  every distinct model already sitting in phones, so nothing
 --                  already in stock goes missing from the pick list.
@@ -66,8 +69,8 @@
 -- every other admin action already leaves. A structural change should never
 -- be untraceable after the fact.
 --
--- TWO JUDGMENT CALLS MADE WRITING THIS FILE (neither was pinned down by the
--- brief, so read before running):
+-- THREE JUDGMENT CALLS MADE WRITING THIS FILE (none was pinned down by the
+-- original brief, so read before running):
 --
 -- 1) "Write a ledger row" — admin_add_shop / admin_rename_shop /
 --    admin_close_shop each act on ONE shop, so they write into that shop's
@@ -94,6 +97,19 @@
 --      select pg_get_functiondef('staff_receive_stock'::regproc);
 --    in the SQL editor and comparing its parameter list against the
 --    definition below. If they differ, fix the signature here first.
+--
+-- 3) The shops section originally assumed shops didn't exist yet
+--    (`create table if not exists`). Checking `information_schema.columns`
+--    before running anything found it already exists, with exactly id and
+--    name (both not null) - no active, no sort_order. A silent no-op
+--    CREATE TABLE would have let every function below that expects
+--    shops.active or shops.sort_order compile fine and then fail the first
+--    time it actually ran (first shop close, first time the picker tried to
+--    sort). Rewritten to ALTER the real table instead, with the primary key
+--    checked rather than assumed, and the three rows reconciled (update
+--    name if the id exists, insert if not) rather than blindly inserted -
+--    confirmed via `select * from shops` that all three already exist with
+--    the expected ids and names before writing the seeding block.
 -- ============================================================================
 
 
@@ -144,24 +160,36 @@ create policy shops_admin_insert on shops for insert with check (is_admin());
 drop policy if exists shops_admin_update on shops;
 create policy shops_admin_update on shops for update using (is_admin()) with check (is_admin());
 
--- ---- SEEDING: NOT YET WRITTEN -----------------------------------------
--- Waiting on the owner to paste the actual `select * from shops` rows
--- before this is finalised - one message contained both "here are the
--- rows, they match" AND "don't finalise until I paste them," and the
--- second is the one being treated as binding here. Once confirmed, this
--- becomes an update-if-exists / insert-if-not per shop (reconcile, never a
--- blind INSERT, and never a second row for an id that's already present):
+-- ---- SEEDING -------------------------------------------------------------
+-- Confirmed via `select * from shops` before writing this block (not
+-- assumed): all three rows already exist, with these exact ids and names.
+-- Two separate, deliberately independent steps:
 --
---   insert into shops (id, name, active, sort_order) values ('harare', 'Harare CBD', true, 1)
---     on conflict (id) do update set name = excluded.name;
---   -- ... same shape for bulawayo1 (sort_order 2) and bulawayo2 (sort_order 3)
---
--- sort_order is set explicitly per shop (1/2/3), not left at the column
--- default of 0 for all three - leaving them all at 0 would make the picker
--- order arbitrary, which staff would notice. If the real ids turn out to
--- differ from harare/bulawayo1/bulawayo2, this whole block - and the
--- assumption that existing phones/ledger/business_day rows already point
--- at those exact ids - needs rethinking before it's written, not after.
+-- 1) Reconcile by id: update the name if the shop already exists, insert
+--    only if it doesn't. Never creates a second row for an id already
+--    present. Since all three already exist with these exact names, THIS
+--    STEP changes zero rows on this run - it's written to reconcile rather
+--    than blindly insert so the file stays correct if it's ever run against
+--    a database where a shop doesn't already exist (a fresh project, or one
+--    of the three genuinely missing).
+insert into shops (id, name) values ('harare', 'Harare CBD')
+  on conflict (id) do update set name = excluded.name;
+insert into shops (id, name) values ('bulawayo1', 'Bulawayo Shop 1')
+  on conflict (id) do update set name = excluded.name;
+insert into shops (id, name) values ('bulawayo2', 'Bulawayo Shop 2')
+  on conflict (id) do update set name = excluded.name;
+
+-- 2) sort_order, set explicitly and separately from the name reconciliation
+--    above - NOT a no-op on this run, unlike step 1. The column was just
+--    added a few statements up in this same file with a default of 0 for
+--    every existing row, so this step WILL change all three rows' sort_order
+--    from 0 to 1/2/3 the first time this file runs. Leaving them all at 0
+--    would make the shop picker's order arbitrary, which staff would
+--    notice, so this is deliberate, not accidental. Idempotent on any later
+--    re-run of this file (same values already in place, no-op then).
+update shops set sort_order = 1 where id = 'harare';
+update shops set sort_order = 2 where id = 'bulawayo1';
+update shops set sort_order = 3 where id = 'bulawayo2';
 
 
 -- ---- models --------------------------------------------------------------
