@@ -1,0 +1,71 @@
+-- ============================================================================
+-- TOWDAH ELECTRONICS SHOP TRACKER — Security Part 2: close off staff table
+-- ============================================================================
+-- ██████████████████████████████████████████████████████████████████████████
+-- █  DO NOT RUN THIS UNTIL THE APP IS DEPLOYED WITH THE index.html CHANGE   █
+-- █  DELIVERED ALONGSIDE THIS FILE (staff picker + ensureStaffNames         █
+-- █  reading staff_public instead of staff).                                █
+-- █                                                                          █
+-- █  Running this file first locks every staff member at every shop out    █
+-- █  immediately: the staff picker's only way to list names today is a     █
+-- █  direct, unauthenticated read of the staff table, and this file        █
+-- █  removes the policy that allows that. Until the new index.html is the  █
+-- █  one staff are actually using, that read has nowhere else to go.       █
+-- ██████████████████████████████████████████████████████████████████████████
+--
+-- Run this AFTER supabase-schema-security-1.sql, and only once the deployed
+-- Netlify site is serving the updated index.html (staff_public in use) and
+-- that's been confirmed working - a staff member can open the app, see their
+-- name in the picker, and sign in.
+--
+-- WHY THIS EXISTS
+-- Part 1 added staff_public so the app *could* stop reading pin_hash. It
+-- deliberately left staff_read_names in place so nothing broke mid-deploy.
+-- This file is the second half: once the app is confirmed to be using
+-- staff_public, the wide-open policy on the real table is no longer needed
+-- by anyone except the admin dashboard (which is authenticated and gets its
+-- own policy here), so it comes off.
+--
+-- REALITY CHECK — READ THIS BEFORE RUNNING
+-- The original plan for this file included rewriting staff_login "hash-only,
+-- no plain-pin fallback" and dropping a plain `pin` column. Neither applies:
+-- staff_login has never had a plain-pin fallback (see security-1.sql's own
+-- reality check - there was never a plaintext PIN in this database), and
+-- there is no `pin` column to drop - only pin_hash exists, and it's already
+-- NOT NULL. The DROP COLUMN statement below is kept anyway, written as
+-- `drop column if exists`, purely as a safe no-op / belt-and-suspenders
+-- statement: it does nothing today, and only matters if a `pin` column is
+-- ever reintroduced by mistake later.
+--
+-- WHAT THIS ADDS OR CHANGES
+--   staff_read_names — DROPPED. This is the one DROP in either security
+--                       file, and it is the entire point of this one.
+--   staff_admin_read — new policy: admin-only SELECT on the real staff
+--                       table (is_admin(), same guard as every admin_*
+--                       function). Lets the admin Settings staff list keep
+--                       reading the real table exactly as it does today.
+--   staff.pin        — drop column if exists (no-op today; see above).
+--
+-- WHAT THIS LEAVES ALONE
+--   staff_public and the three functions from Part 1 - untouched here,
+--   already correct. staff_public keeps working after this file because it
+--   bypasses RLS via its own ownership, not via staff_read_names - dropping
+--   that policy doesn't affect it.
+--   Every other table's policies. The daily_logs_anon_read finding from this
+--   session (cash figures readable by anyone with the anon key) - still
+--   open, still out of scope for this pair of files.
+-- ============================================================================
+
+drop policy if exists staff_read_names on staff;
+
+create policy staff_admin_read on staff for select using (is_admin());
+
+-- No-op today (no `pin` column exists) - kept only so a future accidental
+-- reintroduction of a plaintext column doesn't survive unnoticed.
+alter table staff drop column if exists pin;
+
+-- ============================================================================
+-- Done. After this runs: confirm a staff device can still sign in (reads
+-- staff_public, unaffected), and that Settings' staff list still works for
+-- admin (reads staff directly, now admin-gated instead of wide open).
+-- ============================================================================

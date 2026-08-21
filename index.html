@@ -432,7 +432,7 @@ async function ensureStaffNames(ids){
   const missing = [...new Set(ids.filter(id => id && !STAFF_NAME_INDEX[id]))];
   if(missing.length===0) return;
   try{
-    const { data, error } = await sb.from('staff').select('id,name').in('id', missing);
+    const { data, error } = await sb.from('staff_public').select('id,name').in('id', missing);
     if(!error && data) data.forEach(s=>{ STAFF_NAME_INDEX[s.id] = s.name; });
   }catch(e){ /* best-effort - falls back to showing the raw id, which is at least honest */ }
 }
@@ -761,7 +761,7 @@ function screenStaffPicker(){
 async function loadStaffList(shopId){
   if(!sb){ SB_UNREACHABLE = true; STAFF_LIST_CACHE[shopId] = STAFF_LIST_CACHE[shopId] || []; return STAFF_LIST_CACHE[shopId]; }
   try{
-    const { data, error } = await sb.from('staff').select('id,name').eq('shop_id', shopId).eq('active', true).order('name');
+    const { data, error } = await sb.from('staff_public').select('id,name').eq('shop_id', shopId).eq('active', true).order('name');
     if(error) throw error;
     STAFF_LIST_CACHE[shopId] = data || [];
     (data||[]).forEach(s=>{ STAFF_NAME_INDEX[s.id] = s.name; });
