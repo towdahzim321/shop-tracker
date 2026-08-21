@@ -267,6 +267,33 @@
     background:var(--amber-bg);color:#7A4E0A;border-radius:10px;padding:11px 13px;
     font-size:13px;font-weight:600;margin-bottom:12px;
   }
+  .menu-btn{
+    background:rgba(255,255,255,0.12);border:none;color:#fff;padding:8px 10px;border-radius:10px;
+    font-size:16px;line-height:1;cursor:pointer;flex:0 0 auto;
+  }
+  .menu-overlay{
+    position:fixed;inset:0;background:rgba(20,25,40,0.5);z-index:90;display:flex;
+  }
+  .menu-panel{
+    background:#fff;width:78%;max-width:300px;height:100%;overflow-y:auto;
+    box-shadow:2px 0 18px rgba(0,0,0,0.25);padding:18px 16px;
+  }
+  .menu-panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+  .menu-close{
+    background:#EEF0F3;border:none;color:var(--text);width:32px;height:32px;border-radius:50%;
+    font-size:14px;cursor:pointer;flex:0 0 auto;
+  }
+  .menu-group-title{
+    font-size:11px;font-weight:700;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;
+    margin:18px 0 8px;
+  }
+  .menu-row{
+    padding:12px 10px;border-radius:10px;font-size:14px;font-weight:600;color:var(--text);
+    cursor:pointer;display:flex;justify-content:space-between;align-items:center;
+  }
+  .menu-row:active{background:var(--bg);}
+  .menu-row.current{background:var(--green-bg);color:#0E5C46;}
+  .menu-tick{color:var(--green);font-weight:700;}
 </style>
 </head>
 <body>
@@ -311,6 +338,7 @@ const MODEL_CATALOG = {
 let sb = null;
 let CONFIG = { lowStockThreshold: DEFAULT_LOW_STOCK };
 let SHOP_CACHE = {};
+let MENU_OPEN = false;           // slide-over menu panel, independent of S/view
 let ADMIN_SESSION = null;        // {userId, username} once signed in as admin
 let STAFF_LIST_CACHE = {};       // shopId -> [{id,name}]
 let STAFF_NAME_INDEX = {};       // staffId -> name, built up as staff lists load
@@ -642,7 +670,7 @@ function refreshRow(){
 function render(){
   const app = document.getElementById('app');
   try{
-    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view);
+    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -651,7 +679,7 @@ function showFatal(err, headline){
   const app = document.getElementById('app');
   const msg = (err && err.message) ? err.message : String(err || 'Unknown problem');
   app.innerHTML = `
-    <div class="topbar"><div><div class="title">Shop Tracker</div><div class="sub">Could not start</div></div></div>
+    <div class="topbar"><div style="display:flex;align-items:center;gap:10px;">${menuButton()}<div><div class="title">Shop Tracker</div><div class="sub">Could not start</div></div></div></div>
     <div class="fatal-box">
       <h1>${esc(headline || 'The app could not start')}</h1>
       <p>This usually means the app was opened as a plain file instead of through your shared Shop Tracker link. Open the link the owner sent you, then try again.</p>
@@ -670,12 +698,18 @@ function go(v, extra){
 
 function topbar(title, sub, backView, backExtra){
   return `<div class="topbar">
-    <div>
-      <div class="title">${esc(title)}</div>
-      ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">${esc(title)}</div>
+        ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
+      </div>
     </div>
     ${backView ? `<button class="back" onclick='navBack()'>Back</button>` : ''}
   </div>`;
+}
+function menuButton(){
+  return `<button class="menu-btn no-print" onclick="openMenu()" aria-label="Menu">&#9776;</button>`;
 }
 let BACK_STACK = [];
 function navTo(view, extra){
@@ -689,6 +723,135 @@ function navBack(){
   render();
 }
 function navHome(){ BACK_STACK=[]; go('home'); }
+
+// ---- Slide-over menu: Home / Shops / Staff, built from the current session ----
+function openMenu(){ MENU_OPEN = true; render(); }
+function closeMenu(){ MENU_OPEN = false; render(); }
+
+// A receiving document only lives in `S` until "Finish" saves it via RPC, so
+// jumping away through the menu before then would silently drop it. IMEIs
+// typed into the currently-visible boxes aren't synced back into S as you
+// type, so check the live inputs first and only fall back to S's own copy.
+function hasUnsavedReceiving(){
+  if(S.receiveBatch && S.receiveBatch.lines && S.receiveBatch.lines.length > 0) return true;
+  const d = S.receiveLineDraft;
+  if(d && d.imeis){
+    const rows = document.querySelectorAll('.imeiRow');
+    if(rows.length) return [...rows].some(inp => inp.value.trim());
+    return d.imeis.some(v => v);
+  }
+  return false;
+}
+// beforeGo mutates S (e.g. clearing staffId to switch identity) only once we
+// know navigation is actually happening - if the user cancels the unsaved-
+// work prompt, nothing about the current session should change.
+async function menuNavigate(view, extra, beforeGo){
+  if(hasUnsavedReceiving()){
+    closeMenu();
+    const ok = await askConfirm("Leave this stock receiving document? Any IMEIs you've typed but not saved yet will be lost.", 'Yes, leave it');
+    if(!ok) return;
+  } else {
+    closeMenu();
+  }
+  if(beforeGo) beforeGo();
+  BACK_STACK = [];
+  go(view, extra);
+}
+function currentMenuShopId(){
+  if(S.staffId && S.shopId) return S.shopId;
+  if(ADMIN_SESSION){
+    if(S.mgmtShop) return S.mgmtShop;
+    if(S.dashShop && S.dashShop !== 'all') return S.dashShop;
+  }
+  return null;
+}
+let MENU_STAFF_LOADING = {};
+function getMenuStaffList(shopId){
+  if(S.staffId){
+    if(!STAFF_LIST_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
+      MENU_STAFF_LOADING[shopId] = true;
+      loadStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+    }
+    return STAFF_LIST_CACHE[shopId] || [];
+  }
+  if(!ADMIN_STAFF_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
+    MENU_STAFF_LOADING[shopId] = true;
+    loadAdminStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+  }
+  return (ADMIN_STAFF_CACHE[shopId]||[]).filter(s=>s.active);
+}
+function menuTapShop(shopId){
+  const shop = SHOPS.find(s=>s.id===shopId);
+  if(S.staffId){
+    if(shop && shop.active === false) return; // closed shops aren't offered to staff
+    if(shopId === S.shopId){ menuNavigate('staffMenu'); return; }
+    menuNavigate('staffPicker', {shopId}, ()=>{ S.staffId = null; S.staffName = null; });
+  } else if(ADMIN_SESSION){
+    menuNavigate('ownerDash', {dashShop: shopId});
+  } else {
+    if(shop && shop.active === false) return;
+    menuNavigate('staffPicker', {shopId});
+  }
+}
+function menuTapStaff(staffId, staffName){
+  if(!S.staffId) return;
+  if(staffId === S.staffId){ menuNavigate('staffMenu'); return; }
+  menuNavigate('staffPinEntry', {pendingStaffId:staffId, pendingStaffName:staffName}, ()=>{ S.staffId = null; S.staffName = null; });
+}
+function renderMenuPanel(){
+  const isStaffSession = !!S.staffId;
+  const isAdminSession = !!ADMIN_SESSION;
+  const curShop = currentMenuShopId();
+
+  const homeRows = [
+    `<div class="menu-row" onclick="menuNavigate('home')">Welcome</div>`,
+    `<div class="menu-row" onclick="menuNavigate('staffShop')">Staff entry</div>`
+  ];
+  if(!isStaffSession){
+    homeRows.push(isAdminSession
+      ? `<div class="menu-row" onclick="menuNavigate('ownerDash',{dashShop:'${esc(S.dashShop||'all')}'})">Admin dashboard</div>`
+      : `<div class="menu-row" onclick="menuNavigate('adminLogin')">Admin dashboard</div>`);
+  }
+
+  // Closed shops stay off the list entirely for staff/guests (they can't be
+  // signed into); admin still sees and can open them, marked, since their
+  // history has to stay reachable.
+  const visibleShops = isAdminSession ? SHOPS : SHOPS.filter(s=>s.active !== false);
+  const shopRows = visibleShops.map(s=>{
+    const isCurrent = s.id === curShop;
+    const isClosed = s.active === false;
+    return `<div class="menu-row${isCurrent?' current':''}" onclick="menuTapShop('${s.id}')">
+      <span>${esc(s.name)}${isClosed?' <span style="font-weight:400;color:var(--text-faint);">(closed)</span>':''}</span>${isCurrent?'<span class="menu-tick">&#10003;</span>':''}
+    </div>`;
+  }).join('');
+
+  let staffSection = '';
+  if(curShop){
+    const list = getMenuStaffList(curShop);
+    const rows = list.length===0 ? `<div class="empty" style="padding:10px 4px;">No staff on record for this shop yet.</div>` : list.map(s=>{
+      const isMe = isStaffSession && s.id===S.staffId;
+      const onclickAttr = isStaffSession ? ` onclick="menuTapStaff('${esc(s.id)}','${esc(s.name).replace(/'/g,"\\'")}')"` : '';
+      return `<div class="menu-row${isMe?' current':''}"${onclickAttr} style="${isStaffSession?'':'cursor:default;'}">
+        <span>${esc(s.name)}</span>${isMe?'<span class="menu-tick">&#10003;</span>':''}
+      </div>`;
+    }).join('');
+    staffSection = `<div class="menu-group-title">Staff - ${esc(shopName(curShop))}</div>${rows}`;
+  }
+
+  return `<div class="menu-overlay no-print" onclick="if(event.target===this) closeMenu();">
+    <div class="menu-panel">
+      <div class="menu-panel-head">
+        <div style="font-weight:700;font-size:15px;">Menu</div>
+        <button class="menu-close" onclick="closeMenu()" aria-label="Close menu">&#10005;</button>
+      </div>
+      <div class="menu-group-title" style="margin-top:0;">Home</div>
+      ${homeRows.join('')}
+      <div class="menu-group-title">Shops</div>
+      ${shopRows}
+      ${staffSection}
+    </div>
+  </div>`;
+}
 
 function viewFor(v){
   switch(v){
@@ -722,9 +885,12 @@ function viewFor(v){
 function screenHome(){
   return `
   <div class="topbar">
-    <div>
-      <div class="title">Shop Tracker</div>
-      <div class="sub">Samsung &amp; iPhone shops</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">Shop Tracker</div>
+        <div class="sub">Samsung &amp; iPhone shops</div>
+      </div>
     </div>
   </div>
   <div class="content">
@@ -1240,9 +1406,12 @@ function screenReceiveLineImeis(){
     </div>`).join('');
   return `
   <div class="topbar">
-    <div>
-      <div class="title">Stock receiving document</div>
-      <div class="sub">${esc(d.model)}${d.description?' - '+esc(d.description):''} &middot; ${d.qty} pcs</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">Stock receiving document</div>
+        <div class="sub">${esc(d.model)}${d.description?' - '+esc(d.description):''} &middot; ${d.qty} pcs</div>
+      </div>
     </div>
     <button class="back" onclick="S.receiveStep='lineDetails';render();">Back</button>
   </div>
@@ -1828,9 +1997,12 @@ function screenStockSheet(){
   const preparedBy = isAdminView ? adminName() : (S.staffName || '');
   return `
   <div class="topbar no-print">
-    <div>
-      <div class="title">Daily stock sheet</div>
-      <div class="sub">${esc(shopName(shopId))}</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">Daily stock sheet</div>
+        <div class="sub">${esc(shopName(shopId))}</div>
+      </div>
     </div>
     <button class="back" onclick='navBack()'>Back</button>
   </div>
@@ -2388,7 +2560,10 @@ function screenOwnerPricingForm(shopId, data, batchId){
   const sample = items[0];
   return `
   <div class="topbar">
-    <div><div class="title">Set prices</div><div class="sub">${esc(sample.model)}${sample.description?' - '+esc(sample.description):''}</div></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div><div class="title">Set prices</div><div class="sub">${esc(sample.model)}${sample.description?' - '+esc(sample.description):''}</div></div>
+    </div>
     <button class="back" onclick="S.pricingBatch=null;render();">Back</button>
   </div>
   <div class="content">
