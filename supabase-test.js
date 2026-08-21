@@ -13,9 +13,29 @@ const check = (n, c, x) => { if (c) console.log('  PASS  ' + n); else { failures
 // ---------------------------------------------------------------------------
 // Mock backend (Node side)
 // ---------------------------------------------------------------------------
+// Mirrors the SQL clean_model_key(): trimmed, inner whitespace collapsed,
+// lowercased - must match the app's own cleanModelKey() and the real
+// database function exactly, or "near match"/duplicate tests would pass here
+// while behaving differently for real.
+function cleanKey(s){ return String(s==null?'':s).trim().replace(/\s+/g,' ').toLowerCase(); }
+
 function createBackend(){
   let networkDown = false;
-  const db = { staff: [], admins: [], authUsers: [], phones: [], daily_logs: [], business_days: [], ledger: [], shop_resets: [], settings: { low_stock_threshold: 3 } };
+  const db = {
+    staff: [], admins: [], authUsers: [], phones: [], daily_logs: [], business_days: [], ledger: [], shop_resets: [],
+    settings: { low_stock_threshold: 3 },
+    // Every real deployment always has these three shops, seeded by part 5's
+    // migration itself - so every test gets them for free rather than having
+    // to remember to seed shops before the staff picker can show anything.
+    shops: [
+      {id:'harare', name:'Harare CBD', active:true, sort_order:1},
+      {id:'bulawayo1', name:'Bulawayo Shop 1', active:true, sort_order:2},
+      {id:'bulawayo2', name:'Bulawayo Shop 2', active:true, sort_order:3}
+    ],
+    models: [
+      {id:'m1', name:'Galaxy A55', name_key:'galaxy a55', brand:'Samsung', active:true, created_by:null, created_at:new Date(0).toISOString()}
+    ]
+  };
   let session = null;
   let idc = 1;
   const nid = () => 'id' + (idc++);
@@ -43,6 +63,8 @@ function createBackend(){
     else if(state.table==='admins'){ rows = db.admins; }
     else if(state.table==='settings'){ rows = [{ id:true, low_stock_threshold: db.settings.low_stock_threshold }]; }
     else if(state.table==='shop_resets'){ if(!isAdmin()) throw new Error('permission denied'); rows = db.shop_resets; }
+    else if(state.table==='shops'){ rows = db.shops; }
+    else if(state.table==='models'){ rows = db.models; }
     else rows = [];
 
     if(state.method==='update'){
@@ -77,14 +99,32 @@ function createBackend(){
       if(!staff) return { data:null, error: err('Staff member not recognised for this shop.') };
       const day = db.business_days.find(b=>b.shop_id===p_shop_id && b.date===p_local_date);
       if(!day || day.status!=='open') return { data:null, error: err("Today's business day is not open. Open it before adding entries.") };
-      const allImeis = p_items.flatMap(it=>it.imeis);
-      const dupes = allImeis.filter(im=>db.phones.some(ph=>ph.imei===im));
-      if(dupes.length) return { data:null, error: err('Already recorded: '+dupes.join(', ')) };
+      // Duplicate check is (imei, model), not imei alone: two different real
+      // phones can legitimately share an IMEI across different models. Named
+      // per model in the refusal so staff know exactly what to fix, and
+      // checked against both existing stock AND repeats within this same
+      // document (mirrors the real unique index catching both cases).
+      const seenInDoc = new Set();
+      for(const it of p_items){
+        const key = cleanKey(it.model);
+        for(const imei of it.imeis){
+          const pairKey = imei + '|' + key;
+          if(seenInDoc.has(pairKey)) return { data:null, error: err('Already recorded: '+imei+' ('+it.model+')') };
+          seenInDoc.add(pairKey);
+          if(db.phones.some(ph=>ph.imei===imei && ph.model_key===key)) return { data:null, error: err('Already recorded: '+imei+' ('+it.model+')') };
+        }
+      }
       let count = 0;
       p_items.forEach(it=>{
         const batch = nid();
+        const key = cleanKey(it.model);
+        // Staff typing a model that isn't on the list yet creates it, same
+        // transaction, same as the real staff_receive_stock function.
+        if(!db.models.some(m=>m.name_key===key)){
+          db.models.push({id:nid(), name:it.model, name_key:key, brand:null, active:true, created_by:p_staff_id, created_at:nowIso()});
+        }
         it.imeis.forEach(imei=>{
-          const rec = {id:nid(), shop_id:p_shop_id, imei, model:it.model, description: it.description||null, batch_id:batch,
+          const rec = {id:nid(), shop_id:p_shop_id, imei, model:it.model, model_key:key, description: it.description||null, batch_id:batch,
             cost_price:null, list_price:null, status:'in_stock', date_received:p_local_date, received_ts:nowIso(), received_by:p_staff_id,
             sale_price:null, sold_by:null, date_sold:null, sold_ts:null, below_price:false, price_shortfall:0,
             return_reason:null, fault_parts:null, return_notes:null, date_returned:null, returned_ts:null,
@@ -270,6 +310,65 @@ function createBackend(){
       db.shop_resets.push({id:nid(), shop_id:p_shop_id, wiped_by:adminUsername(), wiped_at:nowIso(),
         phones_removed:counts.phones, ledger_removed:counts.ledger, daily_logs_removed:counts.dailyLogs, business_days_removed:counts.businessDays});
       return { data: counts, error:null };
+    },
+    admin_add_shop({p_name}){
+      if(!isAdmin()) return { data:null, error: err('Admin only.') };
+      if(!p_name || !p_name.trim()) return { data:null, error: err('Shop name is required.') };
+      if(db.shops.some(s=>s.name.toLowerCase()===p_name.trim().toLowerCase())) return { data:null, error: err('A shop with this name already exists.') };
+      let base = p_name.trim().toLowerCase().replace(/[^a-z0-9]+/g,'');
+      if(!base) return { data:null, error: err('Shop name must contain at least one letter or number.') };
+      let id = base, suffix = 0;
+      while(db.shops.some(s=>s.id===id)){ suffix++; id = base + suffix; }
+      const nextOrder = db.shops.reduce((a,s)=>Math.max(a,s.sort_order||0),0) + 1;
+      db.shops.push({id, name:p_name.trim(), active:true, sort_order:nextOrder});
+      db.ledger.push({id:nid(), shop_id:id, ts:nowIso(), type:'shop_added', phone_id:null, model:null, description:null, imei:null, price:null, by_staff:null, by_admin:adminUsername(), note:'Added shop "'+p_name.trim()+'" ('+id+')', extra:null});
+      return { data: id, error:null };
+    },
+    admin_rename_shop({p_shop_id, p_new_name}){
+      if(!isAdmin()) return { data:null, error: err('Admin only.') };
+      if(!p_new_name || !p_new_name.trim()) return { data:null, error: err('Shop name is required.') };
+      const shop = db.shops.find(s=>s.id===p_shop_id);
+      if(!shop) return { data:null, error: err('Shop not found.') };
+      if(db.shops.some(s=>s.id!==p_shop_id && s.name.toLowerCase()===p_new_name.trim().toLowerCase())) return { data:null, error: err('A shop with this name already exists.') };
+      const oldName = shop.name;
+      shop.name = p_new_name.trim();
+      db.ledger.push({id:nid(), shop_id:p_shop_id, ts:nowIso(), type:'shop_renamed', phone_id:null, model:null, description:null, imei:null, price:null, by_staff:null, by_admin:adminUsername(), note:'Renamed shop "'+oldName+'" to "'+shop.name+'"', extra:null});
+      return { data:null, error:null };
+    },
+    admin_close_shop({p_shop_id}){
+      if(!isAdmin()) return { data:null, error: err('Admin only.') };
+      const shop = db.shops.find(s=>s.id===p_shop_id);
+      if(!shop) return { data:null, error: err('Shop not found.') };
+      if(!shop.active) return { data:null, error: err('Shop is already closed.') };
+      shop.active = false;
+      db.ledger.push({id:nid(), shop_id:p_shop_id, ts:nowIso(), type:'shop_closed', phone_id:null, model:null, description:null, imei:null, price:null, by_staff:null, by_admin:adminUsername(), note:'Closed shop "'+shop.name+'"', extra:null});
+      return { data:null, error:null };
+    },
+    admin_rename_model({p_model_id, p_new_name}){
+      if(!isAdmin()) return { data:null, error: err('Admin only.') };
+      if(!p_new_name || !p_new_name.trim()) return { data:null, error: err('Model name is required.') };
+      const model = db.models.find(m=>m.id===p_model_id);
+      if(!model) return { data:null, error: err('Model not found.') };
+      const newKey = cleanKey(p_new_name);
+      if(db.models.some(m=>m.id!==p_model_id && m.name_key===newKey)) return { data:null, error: err('Another model with this name already exists.') };
+      model.name = p_new_name.trim(); model.name_key = newKey;
+      return { data:null, error:null };
+    },
+    admin_set_model_brand({p_model_id, p_brand}){
+      if(!isAdmin()) return { data:null, error: err('Admin only.') };
+      const model = db.models.find(m=>m.id===p_model_id);
+      if(!model) return { data:null, error: err('Model not found.') };
+      model.brand = (p_brand && p_brand.trim()) ? p_brand.trim() : null;
+      return { data:null, error:null };
+    },
+    admin_hide_model({p_model_id}){
+      if(!isAdmin()) return { data:null, error: err('Admin only.') };
+      const model = db.models.find(m=>m.id===p_model_id);
+      if(!model) return { data:null, error: err('Model not found.') };
+      const inUse = db.phones.filter(p=>p.model_key===model.name_key).length;
+      if(inUse > 0) return { data:null, error: err('Cannot hide "'+model.name+'": '+inUse+' phone(s) still reference this model.') };
+      model.active = false;
+      return { data:null, error:null };
     }
   };
   function openOrReopenDay(shopId, date, who, isAdminActor){
@@ -291,10 +390,11 @@ function createBackend(){
   return {
     db,
     setNetworkDown(v){ networkDown = v; },
-    seed({staff, admins, authUsers}){
+    seed({staff, admins, authUsers, models}){
       (staff||[]).forEach(s=>db.staff.push(s));
       (admins||[]).forEach(a=>db.admins.push(a));
       (authUsers||[]).forEach(a=>db.authUsers.push(a));
+      (models||[]).forEach(m=>db.models.push(m));
     },
     async handle(argStr){
       const req = JSON.parse(argStr);
@@ -438,12 +538,18 @@ const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.
   await tap(page, 'Back');
 
   // The client-side check above only catches duplicates against data this
-  // device already has loaded. Prove the *database* independently refuses a
-  // duplicate too (the scenario this actually protects against: two shops
-  // racing to record the same IMEI within the same few seconds).
-  const raceResult = JSON.parse(await backend.handle(JSON.stringify({kind:'rpc', name:'staff_receive_stock',
+  // device already has loaded. Prove the *database* independently enforces
+  // the real rule - (imei, model), not imei alone - the scenario this
+  // protects against is two shops racing to record the same IMEI within the
+  // same few seconds.
+  const sameModelResult = JSON.parse(await backend.handle(JSON.stringify({kind:'rpc', name:'staff_receive_stock',
     params:{p_shop_id:'harare', p_staff_id:'s1', p_local_date: today(), p_items:[{model:'Galaxy A55', description:'', imeis:['111111111111111']}]}})));
-  check('the database itself refuses a duplicate IMEI, independent of the client', raceResult.error && /Already recorded/.test(raceResult.error.message), JSON.stringify(raceResult));
+  check('same IMEI + same model is still refused, independent of the client', sameModelResult.error && /Already recorded: 111111111111111 \(Galaxy A55\)/.test(sameModelResult.error.message), JSON.stringify(sameModelResult));
+
+  const diffModelResult = JSON.parse(await backend.handle(JSON.stringify({kind:'rpc', name:'staff_receive_stock',
+    params:{p_shop_id:'harare', p_staff_id:'s1', p_local_date: today(), p_items:[{model:'iPhone 12', description:'', imeis:['111111111111111']}]}})));
+  check('same IMEI + a DIFFERENT model is accepted - two real phones can share an IMEI across models', !diffModelResult.error, JSON.stringify(diffModelResult));
+  check('the accepted phone is actually on record under the new model', backend.db.phones.some(p=>p.imei==='111111111111111' && p.model==='iPhone 12'), JSON.stringify(backend.db.phones.filter(p=>p.imei==='111111111111111').map(p=>p.model)));
 
   console.log('\n== C. Sale: belowPrice computed server-side from a price staff never sees ==');
   backend.db.phones[0].list_price = 200; // owner sets Zim price directly in the mock, staff never touches this
@@ -605,6 +711,57 @@ const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.
   await cp.waitForTimeout(300);
   const cacheKeys = await cp.evaluate(()=>Object.keys(window.localStorage).filter(k=>k.indexOf('twcache_')===0));
   check('a local cache file is written after a successful shop load', cacheKeys.length>0, JSON.stringify(cacheKeys));
+
+  console.log('\n== K1. A staff-typed new model appears in the pick list on the next load ==');
+  let modelBackend = createBackend();
+  modelBackend.seed({ staff: [{id:'sK1', shop_id:'harare', name:'Kuda', pin:'3344', active:true}] });
+  let mp = await newCtx(browser, modelBackend);
+  await mp.goto(FILE); await mp.waitForTimeout(400);
+  await tap(mp, 'Staff entry'); await tap(mp, 'Harare CBD'); await tap(mp, 'Kuda');
+  await mp.fill('#pinInput', '3344'); await tap(mp, 'Continue');
+  await tap(mp, "Open today's business day");
+  await tap(mp, 'Received new stock');
+  await tap(mp, 'Not listed - type it in');
+  await mp.fill('#recvModel', 'Nokia 3310');
+  await mp.fill('#recvQty', '1');
+  await tap(mp, 'Next: enter IMEIs');
+  await mp.locator('.imeiRow').first().fill('333333333333333');
+  await tap(mp, 'Add this item to the document');
+  await tap(mp, 'Finish: save document to stock');
+  t = await mp.locator('#app').innerText();
+  check('staff-typed new model saves successfully', /1 phone\(s\) added to stock/.test(t), t.slice(0,150));
+  check('a staff-typed new model is created in the database', modelBackend.db.models.some(m=>m.name==='Nokia 3310'), JSON.stringify(modelBackend.db.models.map(m=>m.name)));
+
+  await mp.reload(); await mp.waitForTimeout(400);
+  await tap(mp, 'Staff entry'); await tap(mp, 'Harare CBD'); await tap(mp, 'Kuda');
+  await mp.fill('#pinInput', '3344'); await tap(mp, 'Continue');
+  await tap(mp, 'Received new stock');
+  t = await mp.locator('#app').innerText();
+  check('the staff-typed model now appears in the pick list on the next load', /Nokia 3310/.test(t), t.slice(0,400));
+
+  console.log('\n== K2. Only an admin can call admin_add_shop ==');
+  const shopBackend = createBackend();
+  shopBackend.seed({ staff:[{id:'sK2', shop_id:'harare', name:'Y', pin:'2222', active:true}] });
+  const addShopResult = JSON.parse(await shopBackend.handle(JSON.stringify({kind:'rpc', name:'admin_add_shop', params:{p_name:'Mutare Branch'}})));
+  check('a non-admin cannot call admin_add_shop', addShopResult.error && /Admin only/.test(addShopResult.error.message), JSON.stringify(addShopResult));
+  check('no shop was actually added', !shopBackend.db.shops.some(s=>s.name==='Mutare Branch'));
+
+  console.log('\n== K3. Closing a shop hides it from the staff picker but keeps its history ==');
+  await tap(page, 'Settings');
+  await page.locator('.list-item:has-text("Bulawayo Shop 1")').locator('button:text-is("Close")').click();
+  await page.waitForTimeout(150);
+  await tap(page, 'Yes, close this shop');
+  t = await page.locator('#app').innerText();
+  check('closed shop is marked Closed in Settings', /Bulawayo Shop 1/.test(t) && /Closed/.test(t), t.slice(0,600));
+  check('the database actually marked the shop inactive', backend.db.shops.find(s=>s.id==='bulawayo1').active===false);
+
+  let closedCheckPage = await newCtx(browser, backend);
+  await closedCheckPage.goto(FILE); await closedCheckPage.waitForTimeout(400);
+  await tap(closedCheckPage, 'Staff entry');
+  t = await closedCheckPage.locator('#app').innerText();
+  check('a closed shop no longer appears in the staff shop picker', !/Bulawayo Shop 1/.test(t), t.slice(0,300));
+  check('the other open shops still do', /Harare CBD/.test(t) && /Bulawayo Shop 2/.test(t), t.slice(0,300));
+  check("the closed shop's phone history is still on record, untouched", backend.db.phones.some(p=>p.shop_id==='bulawayo1'), JSON.stringify(backend.db.phones.filter(p=>p.shop_id==='bulawayo1').map(p=>p.id)));
 
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL SUPABASE-REWRITE CHECKS PASSED' : failures + ' FAILED'));

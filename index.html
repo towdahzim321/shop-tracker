@@ -267,27 +267,59 @@
     background:var(--amber-bg);color:#7A4E0A;border-radius:10px;padding:11px 13px;
     font-size:13px;font-weight:600;margin-bottom:12px;
   }
+  .menu-btn{
+    background:rgba(255,255,255,0.12);border:none;color:#fff;padding:8px 10px;border-radius:10px;
+    font-size:16px;line-height:1;cursor:pointer;flex:0 0 auto;
+  }
+  .menu-overlay{
+    position:fixed;inset:0;background:rgba(20,25,40,0.5);z-index:90;display:flex;
+  }
+  .menu-panel{
+    background:#fff;width:78%;max-width:300px;height:100%;overflow-y:auto;
+    box-shadow:2px 0 18px rgba(0,0,0,0.25);padding:18px 16px;
+  }
+  .menu-panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+  .menu-close{
+    background:#EEF0F3;border:none;color:var(--text);width:32px;height:32px;border-radius:50%;
+    font-size:14px;cursor:pointer;flex:0 0 auto;
+  }
+  .menu-group-title{
+    font-size:11px;font-weight:700;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;
+    margin:18px 0 8px;
+  }
+  .menu-row{
+    padding:12px 10px;border-radius:10px;font-size:14px;font-weight:600;color:var(--text);
+    cursor:pointer;display:flex;justify-content:space-between;align-items:center;
+  }
+  .menu-row:active{background:var(--bg);}
+  .menu-row.current{background:var(--green-bg);color:#0E5C46;}
+  .menu-tick{color:var(--green);font-weight:700;}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const SHOPS = [
-  {id:'harare', name:'Harare CBD'},
-  {id:'bulawayo1', name:'Bulawayo Shop 1'},
-  {id:'bulawayo2', name:'Bulawayo Shop 2'}
+// SHOPS and MODEL_LIST are loaded from the database at startup (see
+// loadShopsAndModels below) so the owner can add a shop or a model without
+// anyone editing this file. These hardcoded arrays are ONLY the offline
+// fallback - used if the database can't be reached, so the app still works
+// with the shops/models known at the time this file was last updated.
+const SHOPS_FALLBACK = [
+  {id:'harare', name:'Harare CBD', active:true, sortOrder:1},
+  {id:'bulawayo1', name:'Bulawayo Shop 1', active:true, sortOrder:2},
+  {id:'bulawayo2', name:'Bulawayo Shop 2', active:true, sortOrder:3}
 ];
+let SHOPS = SHOPS_FALLBACK.slice();
 const SUPABASE_URL = 'https://fyizncdfxjfmenudcfds.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_RgCpLFTYc2IMZbbaoEy2LA_SsQ0heGc';
 const DEFAULT_LOW_STOCK = 3;
 const RETURN_REASONS = ['Faulty','Wrong item','Changed mind','Other'];
 const FAULT_PARTS = ['Screen/LCD','Battery','Camera','Charging port','Speaker/Mic','Network/Signal','Buttons','Back cover/glass','Software','Water damage','Other'];
-// Full pick-list for "Received new stock" so staff never have to type a model
-// name by hand - only the IMEI (which can't be avoided) needs typing.
-// "Other / not listed" always remains available as a fallback for anything
-// that shows up outside this list.
-const MODEL_CATALOG = {
+// Same offline-fallback idea as SHOPS_FALLBACK above, grouped by brand the
+// way the picker has always displayed it. MODEL_LIST (below) is the live,
+// flat, database-backed list actually used once loaded.
+const MODEL_CATALOG_FALLBACK = {
   'Samsung': ['Galaxy A04','Galaxy A05','Galaxy A05s','Galaxy A06','Galaxy A14','Galaxy A15','Galaxy A16',
     'Galaxy A24','Galaxy A25','Galaxy A26','Galaxy A34','Galaxy A35','Galaxy A36','Galaxy A54','Galaxy A55','Galaxy A56',
     'Galaxy S20','Galaxy S20 Ultra','Galaxy S21','Galaxy S21 Ultra','Galaxy S22','Galaxy S22 Ultra',
@@ -303,6 +335,51 @@ const MODEL_CATALOG = {
     'iPhone 16','iPhone 16 Plus','iPhone 16 Pro','iPhone 16 Pro Max',
     'iPhone SE']
 };
+// Flat list mirroring the `models` table: {id, name, nameKey, brand, active,
+// createdAt}. Starts pre-filled from the fallback catalog (no id/createdAt,
+// so "Recently added" naturally has nothing to show until real data loads)
+// and is replaced wholesale once loadShopsAndModels() succeeds.
+let MODEL_LIST = Object.keys(MODEL_CATALOG_FALLBACK).flatMap(brand =>
+  MODEL_CATALOG_FALLBACK[brand].map(name => ({id:null, name, nameKey: cleanModelKey(name), brand, active:true, createdAt:null}))
+);
+// Mirrors the SQL clean_model_key() function exactly - trimmed, inner
+// whitespace collapsed, lowercased - so a client-side near-match check lines
+// up with what the database will actually compare.
+function cleanModelKey(s){ return String(s==null?'':s).trim().replace(/\s+/g,' ').toLowerCase(); }
+function levenshtein(a, b){
+  if(a===b) return 0;
+  const la=a.length, lb=b.length;
+  if(la===0) return lb;
+  if(lb===0) return la;
+  let prev = Array.from({length:lb+1}, (_,i)=>i);
+  for(let i=1;i<=la;i++){
+    const cur = [i];
+    for(let j=1;j<=lb;j++){
+      const cost = a[i-1]===b[j-1] ? 0 : 1;
+      cur[j] = Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost);
+    }
+    prev = cur;
+  }
+  return prev[lb];
+}
+// Deliberately conservative: phone model names commonly differ by a single
+// digit (A15 vs A55) and those are genuinely different models, not typos, so
+// this only flags very close spelling variants. A wrong suggestion costs one
+// tap to dismiss - the goal is catching "iPhone14"/"Iphone 14"-style slips,
+// not second-guessing every real model name.
+function findNearMatchModel(typedName){
+  const key = cleanModelKey(typedName);
+  if(!key || key.length < 4) return null;
+  const candidates = MODEL_LIST.filter(m=>m.active !== false);
+  if(candidates.some(m=>m.nameKey===key)) return null;
+  let best = null, bestDist = Infinity;
+  candidates.forEach(m=>{
+    const dist = levenshtein(key, m.nameKey);
+    if(dist < bestDist){ bestDist = dist; best = m; }
+  });
+  const threshold = key.length >= 10 ? 2 : 1;
+  return (best && bestDist > 0 && bestDist <= threshold) ? best : null;
+}
 
 // `sb` is the one door into the shared database. In real use it is the real
 // Supabase client; automated tests inject window.__SB_OVERRIDE__ before this
@@ -311,6 +388,7 @@ const MODEL_CATALOG = {
 let sb = null;
 let CONFIG = { lowStockThreshold: DEFAULT_LOW_STOCK };
 let SHOP_CACHE = {};
+let MENU_OPEN = false;           // slide-over menu panel, independent of S/view
 let ADMIN_SESSION = null;        // {userId, username} once signed in as admin
 let STAFF_LIST_CACHE = {};       // shopId -> [{id,name}]
 let STAFF_NAME_INDEX = {};       // staffId -> name, built up as staff lists load
@@ -357,6 +435,24 @@ async function loadSettings(){
     if(data) CONFIG.lowStockThreshold = data.low_stock_threshold;
     SB_UNREACHABLE = false;
   }catch(e){ SB_UNREACHABLE = true; }
+}
+// Loads the live shop and model lists. On failure SHOPS/MODEL_LIST simply
+// stay at whatever they already are - the hardcoded fallback on first load,
+// or the last successfully-loaded copy on a later failed refresh - so a
+// dropped connection never empties out the shop picker or model list.
+async function loadShopsAndModels(){
+  if(!sb) return;
+  try{
+    const { data, error } = await sb.from('shops').select('*').order('sort_order');
+    if(error) throw error;
+    if(data && data.length) SHOPS = data.map(r=>({id:r.id, name:r.name, active:r.active, sortOrder:r.sort_order}));
+  }catch(e){ /* keep whatever SHOPS already held */ }
+  try{
+    const { data, error } = await sb.from('models').select('*').order('name');
+    if(error) throw error;
+    if(data) MODEL_LIST = data.map(r=>({id:r.id, name:r.name, nameKey:r.name_key, brand:r.brand, active:r.active,
+      createdAt: r.created_at ? new Date(r.created_at).getTime() : null}));
+  }catch(e){ /* keep whatever MODEL_LIST already held */ }
 }
 async function saveLowStockThreshold(n){
   try{
@@ -601,6 +697,20 @@ function closeModal(val){
 const LIVE_VIEWS = ['ownerDash','staffDash','staffMenu','ownerTransactions','ownerDayReport','ownerManage','ownerCashDetail','ownerFaulty'];
 let POLL_TIMER = null;
 let LAST_SYNC = null;
+// Which shop(s) the current admin screen actually needs fresh data for, so a
+// 15-second poll doesn't reload all three shops when only one is on screen.
+// The "All shops" tab/scope is the one case that genuinely needs everything.
+function relevantAdminShopIds(){
+  if(S.view === 'ownerDash'){
+    return (S.dashShop && S.dashShop !== 'all') ? [S.dashShop] : SHOPS.map(x=>x.id);
+  }
+  if(S.view === 'ownerTransactions'){
+    return (S.txShop && S.txShop !== 'all') ? [S.txShop] : SHOPS.map(x=>x.id);
+  }
+  if(S.mgmtShop) return [S.mgmtShop];
+  if(S.sheetShop) return [S.sheetShop];
+  return SHOPS.map(x=>x.id);
+}
 function startPolling(){
   if(POLL_TIMER) return;
   POLL_TIMER = setInterval(()=>{ pollTick(); }, 15000);
@@ -612,7 +722,7 @@ async function pollTick(force){
     const ae = document.activeElement;
     if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName) >= 0) return;
   }
-  const ids = (S.view.indexOf('owner')===0) ? SHOPS.map(x=>x.id) : (S.shopId ? [S.shopId] : []);
+  const ids = (S.view.indexOf('owner')===0) ? relevantAdminShopIds() : (S.shopId ? [S.shopId] : []);
   let changed = false;
   for(const id of ids){
     const before = JSON.stringify(SHOP_CACHE[id] || null);
@@ -635,7 +745,7 @@ function refreshRow(){
 function render(){
   const app = document.getElementById('app');
   try{
-    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view);
+    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -644,7 +754,7 @@ function showFatal(err, headline){
   const app = document.getElementById('app');
   const msg = (err && err.message) ? err.message : String(err || 'Unknown problem');
   app.innerHTML = `
-    <div class="topbar"><div><div class="title">Shop Tracker</div><div class="sub">Could not start</div></div></div>
+    <div class="topbar"><div style="display:flex;align-items:center;gap:10px;">${menuButton()}<div><div class="title">Shop Tracker</div><div class="sub">Could not start</div></div></div></div>
     <div class="fatal-box">
       <h1>${esc(headline || 'The app could not start')}</h1>
       <p>This usually means the app was opened as a plain file instead of through your shared Shop Tracker link. Open the link the owner sent you, then try again.</p>
@@ -663,12 +773,18 @@ function go(v, extra){
 
 function topbar(title, sub, backView, backExtra){
   return `<div class="topbar">
-    <div>
-      <div class="title">${esc(title)}</div>
-      ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">${esc(title)}</div>
+        ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
+      </div>
     </div>
     ${backView ? `<button class="back" onclick='navBack()'>Back</button>` : ''}
   </div>`;
+}
+function menuButton(){
+  return `<button class="menu-btn no-print" onclick="openMenu()" aria-label="Menu">&#9776;</button>`;
 }
 let BACK_STACK = [];
 function navTo(view, extra){
@@ -682,6 +798,135 @@ function navBack(){
   render();
 }
 function navHome(){ BACK_STACK=[]; go('home'); }
+
+// ---- Slide-over menu: Home / Shops / Staff, built from the current session ----
+function openMenu(){ MENU_OPEN = true; render(); }
+function closeMenu(){ MENU_OPEN = false; render(); }
+
+// A receiving document only lives in `S` until "Finish" saves it via RPC, so
+// jumping away through the menu before then would silently drop it. IMEIs
+// typed into the currently-visible boxes aren't synced back into S as you
+// type, so check the live inputs first and only fall back to S's own copy.
+function hasUnsavedReceiving(){
+  if(S.receiveBatch && S.receiveBatch.lines && S.receiveBatch.lines.length > 0) return true;
+  const d = S.receiveLineDraft;
+  if(d && d.imeis){
+    const rows = document.querySelectorAll('.imeiRow');
+    if(rows.length) return [...rows].some(inp => inp.value.trim());
+    return d.imeis.some(v => v);
+  }
+  return false;
+}
+// beforeGo mutates S (e.g. clearing staffId to switch identity) only once we
+// know navigation is actually happening - if the user cancels the unsaved-
+// work prompt, nothing about the current session should change.
+async function menuNavigate(view, extra, beforeGo){
+  if(hasUnsavedReceiving()){
+    closeMenu();
+    const ok = await askConfirm("Leave this stock receiving document? Any IMEIs you've typed but not saved yet will be lost.", 'Yes, leave it');
+    if(!ok) return;
+  } else {
+    closeMenu();
+  }
+  if(beforeGo) beforeGo();
+  BACK_STACK = [];
+  go(view, extra);
+}
+function currentMenuShopId(){
+  if(S.staffId && S.shopId) return S.shopId;
+  if(ADMIN_SESSION){
+    if(S.mgmtShop) return S.mgmtShop;
+    if(S.dashShop && S.dashShop !== 'all') return S.dashShop;
+  }
+  return null;
+}
+let MENU_STAFF_LOADING = {};
+function getMenuStaffList(shopId){
+  if(S.staffId){
+    if(!STAFF_LIST_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
+      MENU_STAFF_LOADING[shopId] = true;
+      loadStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+    }
+    return STAFF_LIST_CACHE[shopId] || [];
+  }
+  if(!ADMIN_STAFF_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
+    MENU_STAFF_LOADING[shopId] = true;
+    loadAdminStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+  }
+  return (ADMIN_STAFF_CACHE[shopId]||[]).filter(s=>s.active);
+}
+function menuTapShop(shopId){
+  const shop = SHOPS.find(s=>s.id===shopId);
+  if(S.staffId){
+    if(shop && shop.active === false) return; // closed shops aren't offered to staff
+    if(shopId === S.shopId){ menuNavigate('staffMenu'); return; }
+    menuNavigate('staffPicker', {shopId}, ()=>{ S.staffId = null; S.staffName = null; });
+  } else if(ADMIN_SESSION){
+    menuNavigate('ownerDash', {dashShop: shopId});
+  } else {
+    if(shop && shop.active === false) return;
+    menuNavigate('staffPicker', {shopId});
+  }
+}
+function menuTapStaff(staffId, staffName){
+  if(!S.staffId) return;
+  if(staffId === S.staffId){ menuNavigate('staffMenu'); return; }
+  menuNavigate('staffPinEntry', {pendingStaffId:staffId, pendingStaffName:staffName}, ()=>{ S.staffId = null; S.staffName = null; });
+}
+function renderMenuPanel(){
+  const isStaffSession = !!S.staffId;
+  const isAdminSession = !!ADMIN_SESSION;
+  const curShop = currentMenuShopId();
+
+  const homeRows = [
+    `<div class="menu-row" onclick="menuNavigate('home')">Welcome</div>`,
+    `<div class="menu-row" onclick="menuNavigate('staffShop')">Staff entry</div>`
+  ];
+  if(!isStaffSession){
+    homeRows.push(isAdminSession
+      ? `<div class="menu-row" onclick="menuNavigate('ownerDash',{dashShop:'${esc(S.dashShop||'all')}'})">Admin dashboard</div>`
+      : `<div class="menu-row" onclick="menuNavigate('adminLogin')">Admin dashboard</div>`);
+  }
+
+  // Closed shops stay off the list entirely for staff/guests (they can't be
+  // signed into); admin still sees and can open them, marked, since their
+  // history has to stay reachable.
+  const visibleShops = isAdminSession ? SHOPS : SHOPS.filter(s=>s.active !== false);
+  const shopRows = visibleShops.map(s=>{
+    const isCurrent = s.id === curShop;
+    const isClosed = s.active === false;
+    return `<div class="menu-row${isCurrent?' current':''}" onclick="menuTapShop('${s.id}')">
+      <span>${esc(s.name)}${isClosed?' <span style="font-weight:400;color:var(--text-faint);">(closed)</span>':''}</span>${isCurrent?'<span class="menu-tick">&#10003;</span>':''}
+    </div>`;
+  }).join('');
+
+  let staffSection = '';
+  if(curShop){
+    const list = getMenuStaffList(curShop);
+    const rows = list.length===0 ? `<div class="empty" style="padding:10px 4px;">No staff on record for this shop yet.</div>` : list.map(s=>{
+      const isMe = isStaffSession && s.id===S.staffId;
+      const onclickAttr = isStaffSession ? ` onclick="menuTapStaff('${esc(s.id)}','${esc(s.name).replace(/'/g,"\\'")}')"` : '';
+      return `<div class="menu-row${isMe?' current':''}"${onclickAttr} style="${isStaffSession?'':'cursor:default;'}">
+        <span>${esc(s.name)}</span>${isMe?'<span class="menu-tick">&#10003;</span>':''}
+      </div>`;
+    }).join('');
+    staffSection = `<div class="menu-group-title">Staff - ${esc(shopName(curShop))}</div>${rows}`;
+  }
+
+  return `<div class="menu-overlay no-print" onclick="if(event.target===this) closeMenu();">
+    <div class="menu-panel">
+      <div class="menu-panel-head">
+        <div style="font-weight:700;font-size:15px;">Menu</div>
+        <button class="menu-close" onclick="closeMenu()" aria-label="Close menu">&#10005;</button>
+      </div>
+      <div class="menu-group-title" style="margin-top:0;">Home</div>
+      ${homeRows.join('')}
+      <div class="menu-group-title">Shops</div>
+      ${shopRows}
+      ${staffSection}
+    </div>
+  </div>`;
+}
 
 function viewFor(v){
   switch(v){
@@ -715,9 +960,12 @@ function viewFor(v){
 function screenHome(){
   return `
   <div class="topbar">
-    <div>
-      <div class="title">Shop Tracker</div>
-      <div class="sub">Samsung &amp; iPhone shops</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">Shop Tracker</div>
+        <div class="sub">Samsung &amp; iPhone shops</div>
+      </div>
     </div>
   </div>
   <div class="content">
@@ -736,10 +984,11 @@ function screenHome(){
 }
 
 function screenStaffShop(){
+  const openShops = SHOPS.filter(s=>s.active !== false);
   return `
   ${topbar('Staff entry','Select your shop', true)}
   <div class="content">
-    ${SHOPS.map(s=>`<button class="btn btn-outline" onclick="navTo('staffPicker',{shopId:'${s.id}'})">${esc(s.name)}</button>`).join('')}
+    ${openShops.map(s=>`<button class="btn btn-outline" onclick="navTo('staffPicker',{shopId:'${s.id}'})">${esc(s.name)}</button>`).join('')}
   </div>`;
 }
 
@@ -1120,6 +1369,7 @@ function screenReceiveLineDetails(){
   const d = S.receiveLineDraft || {};
   if(!d.model && !d.useManual) return screenReceiveModelPick();
   const batchCount = (S.receiveBatch && S.receiveBatch.lines.length) || 0;
+  const nearMatch = S.modelNearMatch;
   return `
   ${topbar('Stock receiving document', shopName(S.shopId) + (batchCount>0 ? ' - item '+(batchCount+1) : ''), true)}
   <div class="content">
@@ -1143,13 +1393,30 @@ function screenReceiveLineDetails(){
       <input type="tel" inputmode="numeric" id="recvQty" placeholder="e.g. 5" value="${d.qty||''}">
     </div>
     <div id="recvErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="proceedToLineImeis()">Next: enter IMEIs</button>
+    ${nearMatch ? `
+      <div class="section-flag">Did you mean "${esc(nearMatch.suggestionName)}"? You typed "${esc(nearMatch.typed)}".</div>
+      <button class="btn btn-primary btn-full-center" onclick="acceptNearMatchModel()">Yes, use "${esc(nearMatch.suggestionName)}"</button>
+      <button class="btn btn-outline btn-full-center" onclick="dismissNearMatchModel()">No, add "${esc(nearMatch.typed)}" as a new model</button>
+    ` : `
+      <button class="btn btn-primary btn-full-center" onclick="proceedToLineImeis()">Next: enter IMEIs</button>
+    `}
     ${batchCount>0 ? `<button class="btn btn-outline btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to item list</button>` : ''}
   </div>`;
 }
 function screenReceiveModelPick(){
   const batchCount = (S.receiveBatch && S.receiveBatch.lines.length) || 0;
   setTimeout(()=>attachModelFilter(),0);
+  const activeModels = MODEL_LIST.filter(m=>m.active !== false);
+  const recentModels = activeModels.filter(m=>m.createdAt).sort((a,b)=>b.createdAt-a.createdAt).slice(0,5);
+  const byBrand = {};
+  activeModels.forEach(m=>{
+    const key = m.brand || 'Other';
+    if(!byBrand[key]) byBrand[key] = [];
+    byBrand[key].push(m);
+  });
+  const brandNames = Object.keys(byBrand).sort((a,b)=> a==='Other' ? 1 : (b==='Other' ? -1 : a.localeCompare(b)));
+  brandNames.forEach(b=>byBrand[b].sort((x,y)=>x.name.localeCompare(y.name)));
+  const brandLabel = (t)=>`<div class="model-brand" style="margin:16px 0 8px;font-weight:700;font-size:13px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.03em;">${esc(t)}</div>`;
   return `
   ${topbar('Stock receiving document', shopName(S.shopId) + (batchCount>0 ? ' - item '+(batchCount+1) : ''), true)}
   <div class="content">
@@ -1160,16 +1427,16 @@ function screenReceiveModelPick(){
       <input type="text" id="modelSearch" placeholder="e.g. A15 or iPhone 13" autofocus>
     </div>
     <div id="modelPickList">
-      ${Object.keys(MODEL_CATALOG).map(brand=>`
-        <div class="model-brand" style="margin:16px 0 8px;font-weight:700;font-size:13px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.03em;">${esc(brand)}</div>
-        <div class="reason-grid">
-          ${MODEL_CATALOG[brand].map(m=>`<div class="reason-btn model-opt" data-m="${esc(m.toLowerCase())}" onclick="pickModel('${esc(m).replace(/'/g,"\\'")}')">${esc(m)}</div>`).join('')}
-        </div>`).join('')}
+      ${recentModels.length ? `${brandLabel('Recently added')}<div class="reason-grid">${recentModels.map(modelOptBtn).join('')}</div>` : ''}
+      ${brandNames.map(brand=>`${brandLabel(brand)}<div class="reason-grid">${byBrand[brand].map(modelOptBtn).join('')}</div>`).join('')}
     </div>
     <div id="modelEmptyMsg" class="empty" style="display:none;">No matches. Tap "Not listed" below to type it in.</div>
     <button class="btn btn-outline btn-full-center" style="margin-top:18px;" onclick="pickModelOther()">Not listed - type it in</button>
     ${batchCount>0 ? `<button class="btn btn-outline btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to item list</button>` : ''}
   </div>`;
+}
+function modelOptBtn(m){
+  return `<div class="reason-btn model-opt" data-m="${esc(m.nameKey)}" onclick="pickModel('${esc(m.name).replace(/'/g,"\\'")}')">${esc(m.name)}</div>`;
 }
 function attachModelFilter(){
   const input = document.getElementById('modelSearch');
@@ -1193,15 +1460,18 @@ function attachModelFilter(){
   });
 }
 function pickModel(m){
+  S.modelNearMatch = null; S.modelNearMatchDismissed = false;
   S.receiveLineDraft = Object.assign({}, S.receiveLineDraft, {model: m, useManual: false});
   render();
 }
 function pickModelOther(){
+  S.modelNearMatch = null; S.modelNearMatchDismissed = false;
   S.receiveLineDraft = Object.assign({}, S.receiveLineDraft, {model: '', useManual: true});
   render();
 }
 function changeModel(){
   syncLineDetailsDraft();
+  S.modelNearMatch = null; S.modelNearMatchDismissed = false;
   S.receiveLineDraft = Object.assign({}, S.receiveLineDraft, {model: '', useManual: false});
   render();
 }
@@ -1220,9 +1490,31 @@ function proceedToLineImeis(){
   const qty = parseInt(document.getElementById('recvQty').value.trim());
   if(!model){ document.getElementById('recvErr').innerHTML = '<div class="err">Select or enter the phone model.</div>'; return; }
   if(isNaN(qty) || qty<=0 || qty>200){ document.getElementById('recvErr').innerHTML = '<div class="err">Enter how many pieces (1-200).</div>'; return; }
+  if(d.useManual && !S.modelNearMatchDismissed){
+    const nearMatch = findNearMatchModel(model);
+    if(nearMatch){
+      S.receiveLineDraft = {model, description, qty, useManual: true};
+      S.modelNearMatch = {typed: model, suggestionName: nearMatch.name};
+      render();
+      return;
+    }
+  }
+  S.modelNearMatch = null;
+  S.modelNearMatchDismissed = false;
   S.receiveLineDraft = {model, description, qty, imeis: new Array(qty).fill('')};
   S.receiveStep = 'lineImeis';
   render();
+}
+function acceptNearMatchModel(){
+  const suggestion = S.modelNearMatch.suggestionName;
+  S.modelNearMatch = null;
+  S.receiveLineDraft = Object.assign({}, S.receiveLineDraft, {model: suggestion, useManual: false});
+  proceedToLineImeis();
+}
+function dismissNearMatchModel(){
+  S.modelNearMatch = null;
+  S.modelNearMatchDismissed = true;
+  proceedToLineImeis();
 }
 function screenReceiveLineImeis(){
   const d = S.receiveLineDraft;
@@ -1233,9 +1525,12 @@ function screenReceiveLineImeis(){
     </div>`).join('');
   return `
   <div class="topbar">
-    <div>
-      <div class="title">Stock receiving document</div>
-      <div class="sub">${esc(d.model)}${d.description?' - '+esc(d.description):''} &middot; ${d.qty} pcs</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">Stock receiving document</div>
+        <div class="sub">${esc(d.model)}${d.description?' - '+esc(d.description):''} &middot; ${d.qty} pcs</div>
+      </div>
     </div>
     <button class="back" onclick="S.receiveStep='lineDetails';render();">Back</button>
   </div>
@@ -1295,6 +1590,7 @@ async function finishReceiving(){
   }
   const totalAdded = res.data;
   await refreshShopData(S.shopId);
+  await loadShopsAndModels(); // picks up any model staff just typed as new
   S.receiveBatch = {lines:[]};
   S.receiveLineDraft = null;
   S.receiveStep = 'lineDetails';
@@ -1821,9 +2117,12 @@ function screenStockSheet(){
   const preparedBy = isAdminView ? adminName() : (S.staffName || '');
   return `
   <div class="topbar no-print">
-    <div>
-      <div class="title">Daily stock sheet</div>
-      <div class="sub">${esc(shopName(shopId))}</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div>
+        <div class="title">Daily stock sheet</div>
+        <div class="sub">${esc(shopName(shopId))}</div>
+      </div>
     </div>
     <button class="back" onclick='navBack()'>Back</button>
   </div>
@@ -1939,6 +2238,9 @@ async function loadShopResetInfo(shopId){
 }
 function screenOwnerSettings(){
   if(S.resetPinStaff) return screenResetPin();
+  if(S.renameShopTarget) return screenRenameShop();
+  if(S.renameModelTarget) return screenRenameModel();
+  if(S.setBrandTarget) return screenSetModelBrand();
   const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
   const shopId = S.settingsShop || SHOPS[0].id;
   if(!ADMIN_STAFF_CACHE[shopId] && !S.settingsLoading){
@@ -1951,9 +2253,49 @@ function screenOwnerSettings(){
   }
   const list = ADMIN_STAFF_CACHE[shopId];
   const lastReset = SHOP_RESET_CACHE[shopId];
+  setTimeout(()=>attachSearchFilter('modelMgmtSearch','modelMgmtList'),0);
   return `
-  ${topbar('Settings', 'Staff logins and alerts', true)}
+  ${topbar('Settings', 'Shops, staff logins and alerts', true)}
   <div class="content">
+    <h2>Shops</h2>
+    ${SHOPS.map(s=>`
+      <div class="list-item" style="cursor:default;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="model">${esc(s.name)}</div>
+          ${s.active===false ? '<span class="chip chip-gray">Closed</span>' : '<span class="chip chip-green">Open</span>'}
+        </div>
+        <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
+          <button class="link-btn" onclick="S.renameShopTarget={id:'${esc(s.id)}',name:'${esc(s.name).replace(/'/g,"\\'")}'};render();">Rename</button>
+          ${s.active!==false ? `<button class="link-btn" style="color:var(--red);" onclick="closeShopAction('${esc(s.id)}','${esc(s.name).replace(/'/g,"\\'")}')">Close</button>` : ''}
+        </div>
+      </div>`).join('')}
+
+    <h2>Add a shop</h2>
+    <div class="field"><label>Shop name</label><input type="text" id="newShopName" placeholder="e.g. Mutare Branch"></div>
+    <div id="addShopErr"></div>
+    <button class="btn btn-outline btn-full-center" onclick="addShopAction()">Add shop</button>
+
+    <h2>Models</h2>
+    <div class="search-box field">
+      <label>Search</label>
+      <input type="text" id="modelMgmtSearch" placeholder="e.g. A15 or iPhone 13">
+    </div>
+    <div id="modelMgmtList">
+      ${MODEL_LIST.filter(m=>m.active!==false).slice().sort((a,b)=>a.name.localeCompare(b.name)).map(m=>`
+        <div class="list-item" data-model="${esc(m.nameKey)}" style="cursor:default;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="model">${esc(m.name)}</div>
+            ${m.brand ? `<span class="chip chip-gray">${esc(m.brand)}</span>` : ''}
+          </div>
+          <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
+            ${m.id ? `
+              <button class="link-btn" onclick="S.renameModelTarget={id:'${esc(m.id)}',name:'${esc(m.name).replace(/'/g,"\\'")}'};render();">Rename</button>
+              <button class="link-btn" onclick="S.setBrandTarget={id:'${esc(m.id)}',name:'${esc(m.name).replace(/'/g,"\\'")}',brand:'${esc(m.brand||'').replace(/'/g,"\\'")}'};render();">Set brand</button>
+            ` : `<span style="color:var(--text-faint);">Not editable until connected</span>`}
+          </div>
+        </div>`).join('')}
+    </div>
+
     <h2>Staff</h2>
     <div class="tabs">
       ${SHOPS.map(s=>`<div class="tab ${shopId===s.id?'active':''}" onclick="S.settingsShop='${s.id}';render();">${esc(s.name)}</div>`).join('')}
@@ -2083,6 +2425,76 @@ async function deactivateStaff(staffId, name){
   render();
 }
 
+// Shared by every Settings action below: call the RPC, and on success reload
+// SHOPS/MODEL_LIST from the database so the change shows up everywhere (the
+// menu panel, the model picker, the shop picker) without a page reload.
+async function settingsAction(rpcName, params){
+  const res = await callRpc(rpcName, params);
+  if(res.ok){ await loadShopsAndModels(); }
+  else { await askAlert(res.error); }
+  render();
+  return res;
+}
+async function addShopAction(){
+  const name = document.getElementById('newShopName').value.trim();
+  if(!name){ document.getElementById('addShopErr').innerHTML = '<div class="err">Enter a shop name.</div>'; return; }
+  await settingsAction('admin_add_shop', {p_name: name});
+}
+async function closeShopAction(shopId, name){
+  if(!await askConfirm('Close '+name+'? Staff will no longer be able to sign in here, but its stock and sales history stays.', 'Yes, close this shop')) return;
+  await settingsAction('admin_close_shop', {p_shop_id: shopId});
+}
+function screenRenameShop(){
+  const target = S.renameShopTarget;
+  return `
+  ${topbar('Rename shop', target.name, true)}
+  <div class="content">
+    <div class="field"><label>New name for ${esc(target.name)}</label><input type="text" id="renameShopInput" value="${esc(target.name)}" autofocus></div>
+    <div id="renameShopErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitRenameShop()">Save name</button>
+    <button class="btn btn-outline btn-full-center" onclick="S.renameShopTarget=null;render();">Cancel</button>
+  </div>`;
+}
+async function submitRenameShop(){
+  const name = document.getElementById('renameShopInput').value.trim();
+  if(!name){ document.getElementById('renameShopErr').innerHTML = '<div class="err">Enter a shop name.</div>'; return; }
+  const res = await settingsAction('admin_rename_shop', {p_shop_id: S.renameShopTarget.id, p_new_name: name});
+  if(res.ok) S.renameShopTarget = null;
+}
+function screenRenameModel(){
+  const target = S.renameModelTarget;
+  return `
+  ${topbar('Rename model', target.name, true)}
+  <div class="content">
+    <div class="field"><label>New name for ${esc(target.name)}</label><input type="text" id="renameModelInput" value="${esc(target.name)}" autofocus></div>
+    <div id="renameModelErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitRenameModel()">Save name</button>
+    <button class="btn btn-outline btn-full-center" onclick="S.renameModelTarget=null;render();">Cancel</button>
+  </div>`;
+}
+async function submitRenameModel(){
+  const name = document.getElementById('renameModelInput').value.trim();
+  if(!name){ document.getElementById('renameModelErr').innerHTML = '<div class="err">Enter a model name.</div>'; return; }
+  const res = await settingsAction('admin_rename_model', {p_model_id: S.renameModelTarget.id, p_new_name: name});
+  if(res.ok) S.renameModelTarget = null;
+}
+function screenSetModelBrand(){
+  const target = S.setBrandTarget;
+  return `
+  ${topbar('Set brand', target.name, true)}
+  <div class="content">
+    <div class="field"><label>Brand for ${esc(target.name)} (leave blank for none)</label><input type="text" id="setBrandInput" value="${esc(target.brand||'')}" placeholder="e.g. Samsung" autofocus></div>
+    <div id="setBrandErr"></div>
+    <button class="btn btn-primary btn-full-center" onclick="submitSetModelBrand()">Save brand</button>
+    <button class="btn btn-outline btn-full-center" onclick="S.setBrandTarget=null;render();">Cancel</button>
+  </div>`;
+}
+async function submitSetModelBrand(){
+  const brand = document.getElementById('setBrandInput').value.trim();
+  const res = await settingsAction('admin_set_model_brand', {p_model_id: S.setBrandTarget.id, p_brand: brand || null});
+  if(res.ok) S.setBrandTarget = null;
+}
+
 function screenOwnerManage(){
   const shopId = S.mgmtShop;
   const data = SHOP_CACHE[shopId] || emptyShopData();
@@ -2198,7 +2610,8 @@ function buildTransactionsForShop(shopId){
 const CORE_TX_TYPES = ['sold','returned','received'];
 const TX_LABELS = {sold:'Sold', returned:'Returned', received:'Received', repaired:'Repaired', written_off:'Written off',
   undo_sale:'Sale undone', undo_return:'Return undone', deleted:'Entry deleted', deleted_eod:'Day log deleted',
-  price_set:'Prices set', cash_confirmed:'Cash confirmed', cash_adjustment:'Cash adjusted', eod:'End of day', reopen:'Day reopened'};
+  price_set:'Prices set', cash_confirmed:'Cash confirmed', cash_adjustment:'Cash adjusted', eod:'End of day', reopen:'Day reopened',
+  shop_added:'Shop added', shop_renamed:'Shop renamed', shop_closed:'Shop closed'};
 function txChipClass(t){
   if(t==='sold') return 'chip-red';
   if(t==='received' || t==='repaired') return 'chip-green';
@@ -2381,7 +2794,10 @@ function screenOwnerPricingForm(shopId, data, batchId){
   const sample = items[0];
   return `
   <div class="topbar">
-    <div><div class="title">Set prices</div><div class="sub">${esc(sample.model)}${sample.description?' - '+esc(sample.description):''}</div></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      ${menuButton()}
+      <div><div class="title">Set prices</div><div class="sub">${esc(sample.model)}${sample.description?' - '+esc(sample.description):''}</div></div>
+    </div>
     <button class="back" onclick="S.pricingBatch=null;render();">Back</button>
   </div>
   <div class="content">
@@ -2502,6 +2918,7 @@ async function init(){
       }catch(e){ /* no existing session to restore - carry on signed out */ }
     }
     await loadSettings();
+    await loadShopsAndModels();
     render();
     startPolling();
   }catch(e){
