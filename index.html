@@ -32,6 +32,10 @@
     font-family:'Inter',system-ui,-apple-system,sans-serif;
     color:var(--text);
     -webkit-tap-highlight-color:transparent;
+    /* Hard backstop: wide content must scroll inside its own .table-scroll
+       frame, never the page. If something is ever missed, this keeps the
+       page itself from scrolling sideways rather than silently allowing it. */
+    overflow-x:hidden;
   }
   #app{
     max-width:480px;
@@ -116,8 +120,8 @@
     cursor:pointer;
   }
   .list-item:active{background:var(--bg);}
-  .list-item .model{font-weight:600;font-size:15px;}
-  .list-item .imei{font-size:12px;color:var(--text-faint);margin-top:2px;}
+  .list-item .model{font-weight:600;font-size:15px;overflow-wrap:anywhere;}
+  .list-item .imei{font-size:12px;color:var(--text-faint);margin-top:2px;overflow-wrap:anywhere;}
   .empty{color:var(--text-faint);font-size:14px;text-align:center;padding:30px 10px;}
   .success-box{
     background:var(--green-bg);
@@ -174,11 +178,32 @@
     font-size:13px;
   }
   .activity-row:last-child{border-bottom:none;}
-  .activity-row .txt{color:var(--text);}
-  .activity-row .time{color:var(--text-faint);white-space:nowrap;margin-left:10px;}
-  table.stock-table{width:100%;border-collapse:collapse;font-size:13px;}
-  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);}
-  table.stock-table td{padding:8px 4px;border-bottom:1px solid var(--border);}
+  .activity-row .txt{color:var(--text);overflow-wrap:anywhere;min-width:0;}
+  .activity-row .time{color:var(--text-faint);white-space:nowrap;margin-left:10px;flex:0 0 auto;}
+  /* Wide tables scroll inside their own frame instead of forcing the page
+     body wider. The frame gets a fade at the right edge, shown only while
+     there is actually more to scroll to (toggled by updateTableFades()
+     after every render - see the JS below). Text is never shrunk to fit;
+     the frame scrolls instead. Printing turns this off entirely - see the
+     @media print block, where the real table just prints at full width. */
+  .table-scroll{
+    position:relative;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    border-radius:10px;
+    background:var(--card);
+  }
+  .table-scroll::after{
+    content:'';
+    position:absolute;top:0;right:0;bottom:0;width:26px;
+    background:linear-gradient(to right, transparent, var(--card) 78%);
+    pointer-events:none;opacity:0;transition:opacity .15s;
+  }
+  .table-scroll.has-overflow::after{opacity:1;}
+  table.stock-table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;table-layout:auto;}
+  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);white-space:nowrap;}
+  table.stock-table td{padding:8px 4px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;}
+  table.stock-table tr.total-row td{background:#F0F2F6;font-weight:700;}
   .chip{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;}
   .chip-green{background:var(--green-bg);color:#0E5C46;}
   .chip-red{background:var(--red-bg);color:#8E2B25;}
@@ -188,7 +213,7 @@
   .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--navy);}
   .dot.filled{background:var(--navy);}
   .reason-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
-  .reason-btn{padding:14px 8px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-size:13px;font-weight:600;text-align:center;cursor:pointer;}
+  .reason-btn{padding:14px 8px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-size:13px;font-weight:600;text-align:center;cursor:pointer;overflow-wrap:anywhere;min-width:0;}
   .reason-btn.selected{background:var(--navy);color:#fff;border-color:var(--navy);}
   .link-btn{background:none;border:none;color:var(--navy);font-size:13px;font-weight:600;text-decoration:underline;padding:0;cursor:pointer;font-family:inherit;}
   .footer-note{text-align:center;color:var(--text-faint);font-size:11px;margin-top:20px;}
@@ -198,8 +223,9 @@
   }
   .modal-box{
     background:#fff;border-radius:16px;padding:22px 20px;max-width:400px;width:100%;
+    box-sizing:border-box;overflow-wrap:anywhere;
   }
-  .modal-box .modal-msg{font-size:16px;font-weight:600;line-height:1.45;margin-bottom:18px;}
+  .modal-box .modal-msg{font-size:16px;font-weight:600;line-height:1.45;margin-bottom:18px;overflow-wrap:anywhere;}
   .modal-box .modal-actions{display:flex;gap:10px;}
   .modal-box .modal-actions button{
     flex:1;padding:15px 10px;border-radius:12px;border:none;font-size:15px;font-weight:600;
@@ -232,13 +258,13 @@
   .sheet-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
   .sheet-head .biz{font-size:17px;font-weight:700;letter-spacing:0.5px;}
   .sheet-head .meta{font-size:12px;color:var(--text-soft);margin-top:2px;}
-  table.sheet-table{width:100%;border-collapse:collapse;font-size:12px;}
+  table.sheet-table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;table-layout:auto;}
   table.sheet-table th{
     text-align:left;font-weight:700;padding:7px 5px;border:1px solid var(--border);
-    background:#F0F2F6;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;
+    background:#F0F2F6;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;
   }
-  table.sheet-table td{padding:8px 5px;border:1px solid var(--border);vertical-align:top;}
-  table.sheet-table td.num{text-align:center;font-weight:600;}
+  table.sheet-table td{padding:8px 5px;border:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere;}
+  table.sheet-table td.num{text-align:center;font-weight:600;white-space:nowrap;}
   table.sheet-table tr.total-row td{background:#F0F2F6;font-weight:700;}
   table.sheet-table .note{font-size:10px;color:var(--text-soft);display:block;}
   .sign-row{display:flex;gap:24px;margin-top:26px;}
@@ -258,6 +284,11 @@
     table.sheet-table tr{page-break-inside:avoid;}
     table.sheet-table td{height:26px;}
     table.stock-table{font-size:11px;}
+    table.stock-table tr.total-row td{background:#EEE !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    /* On paper every column shows at full width, same as before this fix -
+       the scroll frame and its fade are a screen-only affordance. */
+    .table-scroll{overflow:visible !important;}
+    .table-scroll::after{display:none !important;}
     .card{border:1px solid #ccc;-webkit-print-color-adjust:exact;print-color-adjust:exact;page-break-inside:avoid;}
     .warn-banner,.section-flag,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     h2{page-break-after:avoid;}
@@ -674,6 +705,15 @@ function render(){
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
+  setTimeout(updateTableFades, 0);
+}
+// Shows the .table-scroll right-edge fade only on frames that actually have
+// more to scroll to - a table that already fits gets no fade, so it never
+// implies there's more when there isn't.
+function updateTableFades(){
+  document.querySelectorAll('.table-scroll').forEach(el=>{
+    el.classList.toggle('has-overflow', el.scrollWidth > el.clientWidth + 1);
+  });
 }
 function showFatal(err, headline){
   const app = document.getElementById('app');
@@ -1047,6 +1087,7 @@ function screenStaffDash(){
   const stockRows = stockKeys.map(k=>`
     <tr><td>${esc(k)}</td><td>${byModel[k]}</td><td>${byModel[k]<=threshold ? '<span class="chip chip-red">Re-up needed</span>' : '<span class="chip chip-green">OK</span>'}</td></tr>
   `).join('');
+  const stockTotal = stockKeys.reduce((a,k)=>a+byModel[k],0);
   const lowCount = stockKeys.filter(k=>byModel[k]<=threshold).length;
 
   const faultyList = data.inventory.filter(p=>p.status==='faulty').sort((a,b)=>(b.returnedTs||0)-(a.returnedTs||0));
@@ -1071,7 +1112,7 @@ function screenStaffDash(){
     ${faultyList.length>0 ? `<div class="section-flag">${faultyList.length} phone(s) on the faulty shelf - not for sale.</div>` : ''}
     <h2>Stock levels</h2>
     <div class="card">
-      ${stockRows ? `<table class="stock-table"><tr><th>Model</th><th>Qty</th><th>Status</th></tr>${stockRows}</table>` : '<div class="empty">No stock recorded.</div>'}
+      ${stockRows ? `<div class="table-scroll"><table class="stock-table"><tr><th>Model</th><th>Qty</th><th>Status</th></tr>${stockRows}<tr class="total-row"><td>Total</td><td>${stockTotal}</td><td></td></tr></table></div>` : '<div class="empty">No stock recorded.</div>'}
     </div>
 
     <h2>Faulty shelf</h2>
@@ -1836,10 +1877,12 @@ function renderStockByModel(data){
   const rows = Object.keys(byModel).sort().map(m=>`
     <tr><td>${esc(m)}</td><td>${byModel[m].count}</td><td>${money(byModel[m].value)}</td><td>${money(byModel[m].potential)}</td></tr>
   `).join('');
-  return `<table class="stock-table">
+  const totals = Object.values(byModel).reduce((a,x)=>({count:a.count+x.count, value:a.value+x.value, potential:a.potential+x.potential}), {count:0,value:0,potential:0});
+  return `<div class="table-scroll"><table class="stock-table">
     <tr><th>Model</th><th>Units</th><th>Cost value</th><th>Exp. profit</th></tr>
     ${rows}
-  </table>`;
+    <tr class="total-row"><td>Total</td><td>${totals.count}</td><td>${money(totals.value)}</td><td>${money(totals.potential)}</td></tr>
+  </table></div>`;
 }
 function renderStockByModelAll(allData){
   const byModel = {};
@@ -1854,14 +1897,21 @@ function renderStockByModelAll(allData){
   const keys = Object.keys(byModel).sort();
   if(keys.length===0) return '<div class="empty">No stock currently recorded in any shop.</div>';
   const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
-  return `<table class="stock-table">
+  const shopTotals = SHOPS.map(sh=>keys.reduce((a,k)=>a+(byModel[k].perShop[sh.id]||0),0));
+  const grandTotal = keys.reduce((a,k)=>a+byModel[k].total,0);
+  return `<div class="table-scroll"><table class="stock-table">
     <tr><th>Model</th>${SHOPS.map(sh=>`<th>${esc(sh.name.split(' ')[0])}${sh.id==='bulawayo2'?' 2':(sh.id==='bulawayo1'?' 1':'')}</th>`).join('')}<th>Total</th></tr>
     ${keys.map(k=>`<tr>
       <td>${esc(k)} ${byModel[k].total<=threshold?'<span class="chip chip-red">Re-up</span>':''}</td>
       ${SHOPS.map(sh=>`<td>${byModel[k].perShop[sh.id]||0}</td>`).join('')}
       <td><strong>${byModel[k].total}</strong></td>
     </tr>`).join('')}
-  </table>`;
+    <tr class="total-row">
+      <td>Total</td>
+      ${shopTotals.map(t=>`<td>${t}</td>`).join('')}
+      <td>${grandTotal}</td>
+    </tr>
+  </table></div>`;
 }
 function screenOwnerFaulty(){
   const shopId = S.mgmtShop;
@@ -2026,6 +2076,7 @@ function screenStockSheet(){
       </div>
     </div>
 
+    <div class="table-scroll">
     <table class="sheet-table">
       <tr>
         <th>Date</th><th>Model</th><th>Opening</th><th>Goods received</th><th>Sales</th><th>Closing</th><th>Amount</th><th style="width:22%;">Comments</th>
@@ -2051,8 +2102,10 @@ function screenStockSheet(){
         <td></td>
       </tr>
     </table>
+    </div>
 
-    <table class="sheet-table" style="margin-top:14px;">
+    <div class="table-scroll" style="margin-top:14px;">
+    <table class="sheet-table">
       <tr><th colspan="5">Faulty shelf</th></tr>
       <tr>
         <th style="text-transform:none;">Opening</th><th style="text-transform:none;">New faults</th><th style="text-transform:none;">Repaired</th><th style="text-transform:none;">Written off</th><th style="text-transform:none;">Closing</th>
@@ -2065,8 +2118,10 @@ function screenStockSheet(){
         <td class="num">${sheet.faulty.closing}</td>
       </tr>
     </table>
+    </div>
 
-    <table class="sheet-table" style="margin-top:14px;">
+    <div class="table-scroll" style="margin-top:14px;">
+    <table class="sheet-table">
       <tr><th colspan="4">Counted at end of day</th></tr>
       <tr>
         <th style="text-transform:none;">Good phones counted</th><th style="text-transform:none;">Faulty counted</th><th style="text-transform:none;">Cash collected</th><th style="text-transform:none;">Submitted by</th>
@@ -2078,6 +2133,7 @@ function screenStockSheet(){
         <td class="num">${log ? esc(log.submittedBy||'') : '&nbsp;'}</td>
       </tr>
     </table>
+    </div>
 
     <div class="sign-row">
       <div class="sign">Shop staff signature</div>
@@ -2695,6 +2751,7 @@ window.addEventListener('error', function(ev){
     showFatal(ev.error || ev.message);
   }
 });
+window.addEventListener('resize', function(){ updateTableFades(); });
 init();
 </script>
 </body>
