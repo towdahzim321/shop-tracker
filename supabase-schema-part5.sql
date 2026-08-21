@@ -108,12 +108,34 @@ $$;
 
 
 -- ---- shops -------------------------------------------------------------
-create table if not exists shops (
-  id text primary key,
-  name text not null unique,
-  active boolean not null default true,
-  sort_order int not null default 0
-);
+-- CORRECTED: shops already exists in the live database - checked via
+-- information_schema before writing this section, not assumed. It has
+-- exactly two columns, both not null: id (text), name (text). No active, no
+-- sort_order. The original version of this section used
+-- "create table if not exists", which would have silently no-op'd against
+-- the real table - every function below expecting shops.active or
+-- shops.sort_order would then have failed at RUNTIME (first shop-close, or
+-- first time the picker tried to sort) instead of failing loudly here,
+-- where it's obvious and cheap to fix. So: ALTER, not CREATE.
+alter table shops add column if not exists active boolean not null default true;
+alter table shops add column if not exists sort_order int not null default 0;
+
+-- Confirm id is the primary key; add it if for some reason it isn't. Checked
+-- at runtime rather than assumed, same reasoning as above.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.table_constraints
+    where table_schema = 'public' and table_name = 'shops' and constraint_type = 'PRIMARY KEY'
+  ) then
+    alter table shops add primary key (id);
+  end if;
+end $$;
+
+-- RLS on shops was already in place before this file (shops_read_all,
+-- {public}/SELECT/true, confirmed via pg_policies) - these statements are
+-- idempotent re-declarations of that same shape, plus the admin-only
+-- insert/update policies that did NOT already exist. All safe to re-run.
 alter table shops enable row level security;
 drop policy if exists shops_select_all on shops;
 create policy shops_select_all on shops for select using (true);
@@ -122,13 +144,24 @@ create policy shops_admin_insert on shops for insert with check (is_admin());
 drop policy if exists shops_admin_update on shops;
 create policy shops_admin_update on shops for update using (is_admin()) with check (is_admin());
 
--- Seed with the three shops already hardcoded in the app, keeping their exact
--- ids so every existing phone/ledger/business_day row still matches.
-insert into shops (id, name, active, sort_order) values
-  ('harare',     'Harare CBD',       true, 1),
-  ('bulawayo1',  'Bulawayo Shop 1',  true, 2),
-  ('bulawayo2',  'Bulawayo Shop 2',  true, 3)
-on conflict (id) do nothing;
+-- ---- SEEDING: NOT YET WRITTEN -----------------------------------------
+-- Waiting on the owner to paste the actual `select * from shops` rows
+-- before this is finalised - one message contained both "here are the
+-- rows, they match" AND "don't finalise until I paste them," and the
+-- second is the one being treated as binding here. Once confirmed, this
+-- becomes an update-if-exists / insert-if-not per shop (reconcile, never a
+-- blind INSERT, and never a second row for an id that's already present):
+--
+--   insert into shops (id, name, active, sort_order) values ('harare', 'Harare CBD', true, 1)
+--     on conflict (id) do update set name = excluded.name;
+--   -- ... same shape for bulawayo1 (sort_order 2) and bulawayo2 (sort_order 3)
+--
+-- sort_order is set explicitly per shop (1/2/3), not left at the column
+-- default of 0 for all three - leaving them all at 0 would make the picker
+-- order arbitrary, which staff would notice. If the real ids turn out to
+-- differ from harare/bulawayo1/bulawayo2, this whole block - and the
+-- assumption that existing phones/ledger/business_day rows already point
+-- at those exact ids - needs rethinking before it's written, not after.
 
 
 -- ---- models --------------------------------------------------------------
@@ -305,7 +338,16 @@ begin
   end loop;
 
   select coalesce(max(sort_order), 0) + 1 into v_next_order from shops;
-  insert into shops (id, name, active, sort_order) values (v_id, trim(p_name), true, v_next_order);
+  -- The while-loop above already guarantees v_id is free at the moment it
+  -- was checked, but two admins adding a shop with the same name at the
+  -- same instant could both pass that check before either inserts. Catch
+  -- that race explicitly so it surfaces as the same readable message as
+  -- every other refusal here, not a raw unique-constraint error.
+  begin
+    insert into shops (id, name, active, sort_order) values (v_id, trim(p_name), true, v_next_order);
+  exception when unique_violation then
+    raise exception 'A shop with this id already exists.';
+  end;
 
   insert into ledger (id, shop_id, ts, type, by_admin, note)
   values (gen_random_uuid(), v_id, now(), 'shop_added', v_who, 'Added shop "'||trim(p_name)||'" ('||v_id||')');
