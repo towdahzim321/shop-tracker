@@ -85,18 +85,29 @@
 --    screen in the app that reads model_audit; it exists so the trail isn't
 --    lost, not because the UI surfaces it yet.
 --
--- 2) staff_receive_stock's CURRENT body is not visible from this repo (it was
---    defined in parts 1-3, which never got committed here). The version
---    below is rebuilt from the app's RPC call site and its test mock, not
---    copied from the live function. `create or replace function` only
---    replaces an existing function when the parameter types match EXACTLY —
---    if a type here is wrong, this creates a second, overloaded function
---    instead of replacing the real one, which Postgres/PostgREST will then
---    refuse to call at all ("function is not unique"). Before running this
---    file, it is worth running:
---      select pg_get_functiondef('staff_receive_stock'::regproc);
---    in the SQL editor and comparing its parameter list against the
---    definition below. If they differ, fix the signature here first.
+-- 2) staff_receive_stock's CURRENT body — verified against the real schema
+--    dump (backups/schema.dump.sql, pulled straight from the live database),
+--    not reconstructed. Parameter names, order, types and return type all
+--    match exactly. Three real differences were found and are the ONLY
+--    changes made to the live body below:
+--      - the imei-only duplicate pre-check is now an (imei, model_key) check
+--      - unknown models are now auto-inserted into `models`
+--      - a v_model_key variable was added to support both of the above
+--    Two things the live version does that the first draft of this file got
+--    wrong, now fixed to match: it calls the shared staff_of_shop() /
+--    require_day_open() helpers instead of reinventing those checks inline,
+--    and it generates batch_id as 'b' || a hyphen-stripped uuid (a TEXT
+--    value — phones.batch_id is text, not uuid, confirmed both from the
+--    schema dump and from real batchId values already in production data,
+--    e.g. "b8a380439af004bd98a8144caf6524957"). The first draft declared
+--    v_batch_id as uuid, which did not match the live format or column type.
+--    One live limitation is deliberately carried over, not fixed: the
+--    upfront duplicate check only catches a pair already in `phones` — two
+--    copies of the same (imei, model) within the SAME incoming document
+--    aren't pre-checked, and would surface as a raw unique-constraint error
+--    on the second insert rather than the friendly "Already recorded"
+--    message. That's how the live function already behaves today; fixing it
+--    was not one of the two authorised changes, so it was left alone.
 --
 -- 3) The shops section originally assumed shops didn't exist yet
 --    (`create table if not exists`). Checking `information_schema.columns`
@@ -512,70 +523,65 @@ end; $$;
 
 
 -- ---- staff_receive_stock: duplicate check becomes (imei, model_key) -------
--- See the note near the top of this file: this body is reconstructed from
--- the app's call site and its test mock, not copied from the live function.
--- Verify the parameter signature against the real function before running.
---
--- The whole document is refused as one unit (nothing partially saved) if any
--- (imei, model) pair is already on record OR repeated within this same
--- document - relying on the real unique index below as the source of truth,
--- the same way the pre-flight check above relies on it rather than trusting
--- a hand-written duplicate scan. Unknown models are inserted into `models`
--- as part of this same transaction, so a typo'd-but-real model never blocks
--- a sale.
+-- This is the live function (verified against backups/schema.dump.sql, see
+-- the note near the top of this file) with exactly two changes: the
+-- duplicate pre-check is scoped to (imei, model_key) instead of imei alone,
+-- and an unrecognised model is inserted into `models` before its phones are
+-- inserted, so a typo'd-but-real model never blocks a sale. Everything else
+-- - the staff_of_shop()/require_day_open() calls, the upfront single-message
+-- duplicate check, the 'b'+uuid batch id format, the column lists on the
+-- phones/ledger inserts - is unchanged from what is live today.
 create or replace function staff_receive_stock(
   p_shop_id text, p_staff_id uuid, p_local_date date, p_items jsonb
 )
-returns int
+returns integer
 language plpgsql security definer as $$
 declare
-  v_day_status text;
   v_item jsonb;
   v_imei text;
+  v_batch text;
   v_model text;
-  v_description text;
+  v_desc text;
   v_model_key text;
-  v_batch_id uuid;
   v_phone_id uuid;
   v_count int := 0;
+  v_dupes text[];
 begin
-  if not exists (select 1 from staff where id = p_staff_id and shop_id = p_shop_id and active) then
-    raise exception 'Staff member not recognised for this shop.';
+  perform staff_of_shop(p_staff_id, p_shop_id);
+  perform require_day_open(p_shop_id, p_local_date);
+
+  select array_agg(x.imei || ' (' || x.model || ')') into v_dupes
+  from (
+    select jsonb_array_elements_text(v.imeis) as imei, v.model as model
+    from jsonb_to_recordset(p_items) as v(imeis jsonb, model text)
+  ) x
+  where exists (
+    select 1 from phones p
+    where p.imei = x.imei and p.model_key = clean_model_key(x.model)
+  );
+  if v_dupes is not null and array_length(v_dupes,1) > 0 then
+    raise exception 'Already recorded: %', array_to_string(v_dupes, ', ');
   end if;
 
-  select status into v_day_status from business_days where shop_id = p_shop_id and date = p_local_date;
-  if v_day_status is distinct from 'open' then
-    raise exception 'Today''s business day is not open. Open it before adding entries.';
-  end if;
-
-  for v_item in select * from jsonb_array_elements(coalesce(p_items, '[]'::jsonb))
-  loop
+  for v_item in select * from jsonb_array_elements(p_items) loop
+    v_batch := 'b' || replace(gen_random_uuid()::text, '-', '');
     v_model := v_item->>'model';
-    v_description := nullif(v_item->>'description', '');
+    v_desc := nullif(v_item->>'description', '');
     v_model_key := clean_model_key(v_model);
-    v_batch_id := gen_random_uuid();
 
     insert into models (name, name_key, active, created_by)
       values (trim(v_model), v_model_key, true, p_staff_id)
       on conflict (name_key) do nothing;
 
-    for v_imei in select * from jsonb_array_elements_text(coalesce(v_item->'imeis', '[]'::jsonb))
-    loop
-      begin
-        insert into phones (id, shop_id, imei, model, description, batch_id, status, date_received, received_ts, received_by)
-        values (gen_random_uuid(), p_shop_id, v_imei, v_model, v_description, v_batch_id, 'in_stock', p_local_date, now(), p_staff_id)
+    for v_imei in select jsonb_array_elements_text(v_item->'imeis') loop
+      insert into phones (shop_id, imei, model, description, batch_id, status, date_received, received_ts, received_by)
+        values (p_shop_id, v_imei, v_model, v_desc, v_batch, 'in_stock', p_local_date, now(), p_staff_id)
         returning id into v_phone_id;
-      exception when unique_violation then
-        raise exception 'Already recorded: % (%)', v_imei, v_model;
-      end;
-
-      insert into ledger (id, shop_id, ts, type, phone_id, model, description, imei, by_staff, extra)
-      values (gen_random_uuid(), p_shop_id, now(), 'received', v_phone_id, v_model, v_description, v_imei, p_staff_id, jsonb_build_object('batchId', v_batch_id));
-
+      insert into ledger (shop_id, ts, type, phone_id, model, description, imei, by_staff, extra)
+        values (p_shop_id, now(), 'received', v_phone_id, v_model, v_desc, v_imei, p_staff_id, jsonb_build_object('batchId', v_batch));
       v_count := v_count + 1;
     end loop;
   end loop;
-
   return v_count;
 end; $$;
 
