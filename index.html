@@ -701,7 +701,7 @@ function refreshRow(){
 function render(){
   const app = document.getElementById('app');
   try{
-    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
+    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view);
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -765,30 +765,69 @@ function navBack(){
 function navHome(){ BACK_STACK=[]; go('home'); }
 
 // ---- Slide-over menu: Home / Shops / Staff, built from the current session ----
-function openMenu(){ MENU_OPEN = true; render(); }
-function closeMenu(){ MENU_OPEN = false; render(); }
-
-// A receiving document only lives in `S` until "Finish" saves it via RPC, so
-// jumping away through the menu before then would silently drop it. IMEIs
-// typed into the currently-visible boxes aren't synced back into S as you
-// type, so check the live inputs first and only fall back to S's own copy.
-function hasUnsavedReceiving(){
-  if(S.receiveBatch && S.receiveBatch.lines && S.receiveBatch.lines.length > 0) return true;
-  const d = S.receiveLineDraft;
-  if(d && d.imeis){
-    const rows = document.querySelectorAll('.imeiRow');
-    if(rows.length) return [...rows].some(inp => inp.value.trim());
-    return d.imeis.some(v => v);
-  }
-  return false;
+// Kept as its own DOM layer appended to <body>, deliberately outside #app, so
+// opening/closing it never runs the full render() -> viewFor(S.view) cycle.
+// That cycle rebuilds the current screen's inputs from S, which would wipe
+// out anything typed but not yet synced back into S (e.g. IMEI boxes, the
+// sale price, end-of-day counts) the instant the menu button was tapped -
+// before the unsaved-work guard even got a chance to see it.
+function renderMenu(){
+  const el = document.getElementById('menuPanelRoot');
+  if(el) el.innerHTML = renderMenuPanel();
 }
+function openMenu(){
+  MENU_OPEN = true;
+  if(!document.getElementById('menuPanelRoot')){
+    const el = document.createElement('div');
+    el.id = 'menuPanelRoot';
+    document.body.appendChild(el);
+  }
+  renderMenu();
+}
+function closeMenu(){
+  MENU_OPEN = false;
+  const el = document.getElementById('menuPanelRoot');
+  if(el) el.remove();
+}
+
+// Several forms keep their live values only in the DOM until their own submit
+// button runs - a receiving document's IMEI boxes, the sale price box, the
+// end-of-day counts - and never sync into S as you type. A guard that only
+// looked at S would see an empty draft and let the jump through, so this
+// reads the actual on-screen inputs instead (falling back to S only where an
+// input isn't currently rendered, e.g. mid-batch between IMEI lines).
+// Returns null if nothing would be lost, else which kind of form it is, so
+// the confirm message can name the right thing.
+function unsavedEntryKind(){
+  if(S.receiveBatch && S.receiveBatch.lines && S.receiveBatch.lines.length > 0) return 'receiving';
+  const imeiRows = document.querySelectorAll('.imeiRow');
+  if(imeiRows.length){
+    if([...imeiRows].some(inp => inp.value.trim())) return 'receiving';
+  } else if(S.receiveLineDraft && S.receiveLineDraft.imeis && S.receiveLineDraft.imeis.some(v => v)){
+    return 'receiving';
+  }
+  const priceInput = document.getElementById('priceInput');
+  if(priceInput && priceInput.value.trim() !== (priceInput.defaultValue||'').trim()) return 'sale';
+  const eodChanged = ['eodCount','eodFaulty','eodCash'].some(id=>{
+    const inp = document.getElementById(id);
+    return inp && inp.value.trim() !== (inp.defaultValue||'').trim();
+  });
+  if(eodChanged) return 'eod';
+  return null;
+}
+const UNSAVED_ENTRY_MESSAGES = {
+  receiving: "Leave this stock receiving document? Any IMEIs you've typed but not saved yet will be lost.",
+  sale: "Leave without confirming this sale? The price you've entered will be lost.",
+  eod: "Leave without submitting end of day? The count and cash you've entered will be lost."
+};
 // beforeGo mutates S (e.g. clearing staffId to switch identity) only once we
 // know navigation is actually happening - if the user cancels the unsaved-
 // work prompt, nothing about the current session should change.
 async function menuNavigate(view, extra, beforeGo){
-  if(hasUnsavedReceiving()){
+  const unsavedKind = unsavedEntryKind();
+  if(unsavedKind){
     closeMenu();
-    const ok = await askConfirm("Leave this stock receiving document? Any IMEIs you've typed but not saved yet will be lost.", 'Yes, leave it');
+    const ok = await askConfirm(UNSAVED_ENTRY_MESSAGES[unsavedKind], 'Yes, leave it');
     if(!ok) return;
   } else {
     closeMenu();
@@ -810,13 +849,13 @@ function getMenuStaffList(shopId){
   if(S.staffId){
     if(!STAFF_LIST_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
       MENU_STAFF_LOADING[shopId] = true;
-      loadStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+      loadStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; renderMenu(); });
     }
     return STAFF_LIST_CACHE[shopId] || [];
   }
   if(!ADMIN_STAFF_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
     MENU_STAFF_LOADING[shopId] = true;
-    loadAdminStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+    loadAdminStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; renderMenu(); });
   }
   return (ADMIN_STAFF_CACHE[shopId]||[]).filter(s=>s.active);
 }
@@ -893,7 +932,16 @@ function renderMenuPanel(){
   </div>`;
 }
 
+// Single choke point for every admin-only screen. Individual entry points
+// (the menu, buttons inside owner screens) already check ADMIN_SESSION before
+// navigating, but this is the one place that actually renders a view, so it's
+// the backstop that stays correct even if a future call site forgets to
+// check, or S.view ends up here some other way (stale back-stack, etc).
+const OWNER_ONLY_VIEWS = ['ownerDash','ownerSettings','wipeShop','ownerManage','ownerPricing','ownerDayReport','ownerTransactions','ownerCashDetail','ownerFaulty'];
 function viewFor(v){
+  if(OWNER_ONLY_VIEWS.indexOf(v) !== -1 && !ADMIN_SESSION){
+    return screenAdminLogin();
+  }
   switch(v){
     case 'home': return screenHome();
     case 'staffShop': return screenStaffShop();
