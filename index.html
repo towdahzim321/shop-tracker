@@ -32,6 +32,10 @@
     font-family:'Inter',system-ui,-apple-system,sans-serif;
     color:var(--text);
     -webkit-tap-highlight-color:transparent;
+    /* Hard backstop: wide content must scroll inside its own .table-scroll
+       frame, never the page. If something is ever missed, this keeps the
+       page itself from scrolling sideways rather than silently allowing it. */
+    overflow-x:hidden;
   }
   #app{
     max-width:480px;
@@ -116,8 +120,8 @@
     cursor:pointer;
   }
   .list-item:active{background:var(--bg);}
-  .list-item .model{font-weight:600;font-size:15px;}
-  .list-item .imei{font-size:12px;color:var(--text-faint);margin-top:2px;}
+  .list-item .model{font-weight:600;font-size:15px;overflow-wrap:anywhere;}
+  .list-item .imei{font-size:12px;color:var(--text-faint);margin-top:2px;overflow-wrap:anywhere;}
   .empty{color:var(--text-faint);font-size:14px;text-align:center;padding:30px 10px;}
   .success-box{
     background:var(--green-bg);
@@ -174,11 +178,32 @@
     font-size:13px;
   }
   .activity-row:last-child{border-bottom:none;}
-  .activity-row .txt{color:var(--text);}
-  .activity-row .time{color:var(--text-faint);white-space:nowrap;margin-left:10px;}
-  table.stock-table{width:100%;border-collapse:collapse;font-size:13px;}
-  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);}
-  table.stock-table td{padding:8px 4px;border-bottom:1px solid var(--border);}
+  .activity-row .txt{color:var(--text);overflow-wrap:anywhere;min-width:0;}
+  .activity-row .time{color:var(--text-faint);white-space:nowrap;margin-left:10px;flex:0 0 auto;}
+  /* Wide tables scroll inside their own frame instead of forcing the page
+     body wider. The frame gets a fade at the right edge, shown only while
+     there is actually more to scroll to (toggled by updateTableFades()
+     after every render - see the JS below). Text is never shrunk to fit;
+     the frame scrolls instead. Printing turns this off entirely - see the
+     @media print block, where the real table just prints at full width. */
+  .table-scroll{
+    position:relative;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    border-radius:10px;
+    background:var(--card);
+  }
+  .table-scroll::after{
+    content:'';
+    position:absolute;top:0;right:0;bottom:0;width:26px;
+    background:linear-gradient(to right, transparent, var(--card) 78%);
+    pointer-events:none;opacity:0;transition:opacity .15s;
+  }
+  .table-scroll.has-overflow::after{opacity:1;}
+  table.stock-table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;table-layout:auto;}
+  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);white-space:nowrap;}
+  table.stock-table td{padding:8px 4px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;}
+  table.stock-table tr.total-row td{background:#F0F2F6;font-weight:700;}
   .chip{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;}
   .chip-green{background:var(--green-bg);color:#0E5C46;}
   .chip-red{background:var(--red-bg);color:#8E2B25;}
@@ -188,7 +213,7 @@
   .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--navy);}
   .dot.filled{background:var(--navy);}
   .reason-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
-  .reason-btn{padding:14px 8px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-size:13px;font-weight:600;text-align:center;cursor:pointer;}
+  .reason-btn{padding:14px 8px;border-radius:10px;border:1.5px solid var(--border);background:#fff;font-size:13px;font-weight:600;text-align:center;cursor:pointer;overflow-wrap:anywhere;min-width:0;}
   .reason-btn.selected{background:var(--navy);color:#fff;border-color:var(--navy);}
   .link-btn{background:none;border:none;color:var(--navy);font-size:13px;font-weight:600;text-decoration:underline;padding:0;cursor:pointer;font-family:inherit;}
   .footer-note{text-align:center;color:var(--text-faint);font-size:11px;margin-top:20px;}
@@ -198,8 +223,9 @@
   }
   .modal-box{
     background:#fff;border-radius:16px;padding:22px 20px;max-width:400px;width:100%;
+    box-sizing:border-box;overflow-wrap:anywhere;
   }
-  .modal-box .modal-msg{font-size:16px;font-weight:600;line-height:1.45;margin-bottom:18px;}
+  .modal-box .modal-msg{font-size:16px;font-weight:600;line-height:1.45;margin-bottom:18px;overflow-wrap:anywhere;}
   .modal-box .modal-actions{display:flex;gap:10px;}
   .modal-box .modal-actions button{
     flex:1;padding:15px 10px;border-radius:12px;border:none;font-size:15px;font-weight:600;
@@ -232,13 +258,13 @@
   .sheet-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}
   .sheet-head .biz{font-size:17px;font-weight:700;letter-spacing:0.5px;}
   .sheet-head .meta{font-size:12px;color:var(--text-soft);margin-top:2px;}
-  table.sheet-table{width:100%;border-collapse:collapse;font-size:12px;}
+  table.sheet-table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;table-layout:auto;}
   table.sheet-table th{
     text-align:left;font-weight:700;padding:7px 5px;border:1px solid var(--border);
-    background:#F0F2F6;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;
+    background:#F0F2F6;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;
   }
-  table.sheet-table td{padding:8px 5px;border:1px solid var(--border);vertical-align:top;}
-  table.sheet-table td.num{text-align:center;font-weight:600;}
+  table.sheet-table td{padding:8px 5px;border:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere;}
+  table.sheet-table td.num{text-align:center;font-weight:600;white-space:nowrap;}
   table.sheet-table tr.total-row td{background:#F0F2F6;font-weight:700;}
   table.sheet-table .note{font-size:10px;color:var(--text-soft);display:block;}
   .sign-row{display:flex;gap:24px;margin-top:26px;}
@@ -258,6 +284,11 @@
     table.sheet-table tr{page-break-inside:avoid;}
     table.sheet-table td{height:26px;}
     table.stock-table{font-size:11px;}
+    table.stock-table tr.total-row td{background:#EEE !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    /* On paper every column shows at full width, same as before this fix -
+       the scroll frame and its fade are a screen-only affordance. */
+    .table-scroll{overflow:visible !important;}
+    .table-scroll::after{display:none !important;}
     .card{border:1px solid #ccc;-webkit-print-color-adjust:exact;print-color-adjust:exact;page-break-inside:avoid;}
     .warn-banner,.section-flag,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     h2{page-break-after:avoid;}
@@ -528,7 +559,7 @@ async function ensureStaffNames(ids){
   const missing = [...new Set(ids.filter(id => id && !STAFF_NAME_INDEX[id]))];
   if(missing.length===0) return;
   try{
-    const { data, error } = await sb.from('staff').select('id,name').in('id', missing);
+    const { data, error } = await sb.from('staff_public').select('id,name').in('id', missing);
     if(!error && data) data.forEach(s=>{ STAFF_NAME_INDEX[s.id] = s.name; });
   }catch(e){ /* best-effort - falls back to showing the raw id, which is at least honest */ }
 }
@@ -621,10 +652,17 @@ async function refreshShopData(shopId){
   const isAdmin = !!ADMIN_SESSION;
   const phonesTable = isAdmin ? 'phones' : 'phones_staff_view';
   const ledgerTable = isAdmin ? 'ledger' : 'ledger_staff_view';
+  // Admin reads the real table (its own is_admin() policy still allows this).
+  // Staff are never authenticated Supabase Auth users, so a table policy
+  // can't single them out - the narrow door for them is this RPC instead,
+  // scoped to one shop's last 60 days rather than every shop's full history.
+  const logsPromise = isAdmin
+    ? sb.from('daily_logs').select('*').eq('shop_id', shopId)
+    : sb.rpc('staff_recent_daily_logs', {p_shop_id: shopId});
   try{
     const [phonesRes, logsRes, daysRes, ledgerRes] = await Promise.all([
       sb.from(phonesTable).select('*').eq('shop_id', shopId),
-      sb.from('daily_logs').select('*').eq('shop_id', shopId),
+      logsPromise,
       sb.from('business_days').select('*').eq('shop_id', shopId),
       sb.from(ledgerTable).select('*').eq('shop_id', shopId).order('ts',{ascending:false}).limit(5000)
     ]);
@@ -744,11 +782,24 @@ function refreshRow(){
 
 function render(){
   const app = document.getElementById('app');
+  // Nobody should be half-admin, half-staff. Checked on every render rather
+  // than at each place staffId can get set, so it can't be missed by a call
+  // site that forgets to clear it.
+  if(S.staffId && ADMIN_SESSION) clearAdminSession();
   try{
     app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
+  setTimeout(updateTableFades, 0);
+}
+// Shows the .table-scroll right-edge fade only on frames that actually have
+// more to scroll to - a table that already fits gets no fade, so it never
+// implies there's more when there isn't.
+function updateTableFades(){
+  document.querySelectorAll('.table-scroll').forEach(el=>{
+    el.classList.toggle('has-overflow', el.scrollWidth > el.clientWidth + 1);
+  });
 }
 function showFatal(err, headline){
   const app = document.getElementById('app');
@@ -800,30 +851,69 @@ function navBack(){
 function navHome(){ BACK_STACK=[]; go('home'); }
 
 // ---- Slide-over menu: Home / Shops / Staff, built from the current session ----
-function openMenu(){ MENU_OPEN = true; render(); }
-function closeMenu(){ MENU_OPEN = false; render(); }
-
-// A receiving document only lives in `S` until "Finish" saves it via RPC, so
-// jumping away through the menu before then would silently drop it. IMEIs
-// typed into the currently-visible boxes aren't synced back into S as you
-// type, so check the live inputs first and only fall back to S's own copy.
-function hasUnsavedReceiving(){
-  if(S.receiveBatch && S.receiveBatch.lines && S.receiveBatch.lines.length > 0) return true;
-  const d = S.receiveLineDraft;
-  if(d && d.imeis){
-    const rows = document.querySelectorAll('.imeiRow');
-    if(rows.length) return [...rows].some(inp => inp.value.trim());
-    return d.imeis.some(v => v);
-  }
-  return false;
+// Kept as its own DOM layer appended to <body>, deliberately outside #app, so
+// opening/closing it never runs the full render() -> viewFor(S.view) cycle.
+// That cycle rebuilds the current screen's inputs from S, which would wipe
+// out anything typed but not yet synced back into S (e.g. IMEI boxes, the
+// sale price, end-of-day counts) the instant the menu button was tapped -
+// before the unsaved-work guard even got a chance to see it.
+function renderMenu(){
+  const el = document.getElementById('menuPanelRoot');
+  if(el) el.innerHTML = renderMenuPanel();
 }
+function openMenu(){
+  MENU_OPEN = true;
+  if(!document.getElementById('menuPanelRoot')){
+    const el = document.createElement('div');
+    el.id = 'menuPanelRoot';
+    document.body.appendChild(el);
+  }
+  renderMenu();
+}
+function closeMenu(){
+  MENU_OPEN = false;
+  const el = document.getElementById('menuPanelRoot');
+  if(el) el.remove();
+}
+
+// Several forms keep their live values only in the DOM until their own submit
+// button runs - a receiving document's IMEI boxes, the sale price box, the
+// end-of-day counts - and never sync into S as you type. A guard that only
+// looked at S would see an empty draft and let the jump through, so this
+// reads the actual on-screen inputs instead (falling back to S only where an
+// input isn't currently rendered, e.g. mid-batch between IMEI lines).
+// Returns null if nothing would be lost, else which kind of form it is, so
+// the confirm message can name the right thing.
+function unsavedEntryKind(){
+  if(S.receiveBatch && S.receiveBatch.lines && S.receiveBatch.lines.length > 0) return 'receiving';
+  const imeiRows = document.querySelectorAll('.imeiRow');
+  if(imeiRows.length){
+    if([...imeiRows].some(inp => inp.value.trim())) return 'receiving';
+  } else if(S.receiveLineDraft && S.receiveLineDraft.imeis && S.receiveLineDraft.imeis.some(v => v)){
+    return 'receiving';
+  }
+  const priceInput = document.getElementById('priceInput');
+  if(priceInput && priceInput.value.trim() !== (priceInput.defaultValue||'').trim()) return 'sale';
+  const eodChanged = ['eodCount','eodFaulty','eodCash'].some(id=>{
+    const inp = document.getElementById(id);
+    return inp && inp.value.trim() !== (inp.defaultValue||'').trim();
+  });
+  if(eodChanged) return 'eod';
+  return null;
+}
+const UNSAVED_ENTRY_MESSAGES = {
+  receiving: "Leave this stock receiving document? Any IMEIs you've typed but not saved yet will be lost.",
+  sale: "Leave without confirming this sale? The price you've entered will be lost.",
+  eod: "Leave without submitting end of day? The count and cash you've entered will be lost."
+};
 // beforeGo mutates S (e.g. clearing staffId to switch identity) only once we
 // know navigation is actually happening - if the user cancels the unsaved-
 // work prompt, nothing about the current session should change.
 async function menuNavigate(view, extra, beforeGo){
-  if(hasUnsavedReceiving()){
+  const unsavedKind = unsavedEntryKind();
+  if(unsavedKind){
     closeMenu();
-    const ok = await askConfirm("Leave this stock receiving document? Any IMEIs you've typed but not saved yet will be lost.", 'Yes, leave it');
+    const ok = await askConfirm(UNSAVED_ENTRY_MESSAGES[unsavedKind], 'Yes, leave it');
     if(!ok) return;
   } else {
     closeMenu();
@@ -845,13 +935,13 @@ function getMenuStaffList(shopId){
   if(S.staffId){
     if(!STAFF_LIST_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
       MENU_STAFF_LOADING[shopId] = true;
-      loadStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+      loadStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; renderMenu(); });
     }
     return STAFF_LIST_CACHE[shopId] || [];
   }
   if(!ADMIN_STAFF_CACHE[shopId] && !MENU_STAFF_LOADING[shopId]){
     MENU_STAFF_LOADING[shopId] = true;
-    loadAdminStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; render(); });
+    loadAdminStaffList(shopId).then(()=>{ MENU_STAFF_LOADING[shopId]=false; renderMenu(); });
   }
   return (ADMIN_STAFF_CACHE[shopId]||[]).filter(s=>s.active);
 }
@@ -877,6 +967,11 @@ function renderMenuPanel(){
   const isStaffSession = !!S.staffId;
   const isAdminSession = !!ADMIN_SESSION;
   const curShop = currentMenuShopId();
+  // Always visible so anyone picking up the phone can tell at a glance
+  // whether it's carrying a live session, and whose.
+  const signedInLabel = isStaffSession
+    ? `Signed in as ${esc(S.staffName||'')}${curShop ? ' &middot; '+esc(shopName(curShop)) : ''}`
+    : isAdminSession ? 'Signed in as owner (admin)' : 'Not signed in';
 
   const homeRows = [
     `<div class="menu-row" onclick="menuNavigate('home')">Welcome</div>`,
@@ -919,6 +1014,7 @@ function renderMenuPanel(){
         <div style="font-weight:700;font-size:15px;">Menu</div>
         <button class="menu-close" onclick="closeMenu()" aria-label="Close menu">&#10005;</button>
       </div>
+      <div style="font-size:12px;color:var(--text-soft);margin:-4px 0 14px;">${signedInLabel}</div>
       <div class="menu-group-title" style="margin-top:0;">Home</div>
       ${homeRows.join('')}
       <div class="menu-group-title">Shops</div>
@@ -928,7 +1024,16 @@ function renderMenuPanel(){
   </div>`;
 }
 
+// Single choke point for every admin-only screen. Individual entry points
+// (the menu, buttons inside owner screens) already check ADMIN_SESSION before
+// navigating, but this is the one place that actually renders a view, so it's
+// the backstop that stays correct even if a future call site forgets to
+// check, or S.view ends up here some other way (stale back-stack, etc).
+const OWNER_ONLY_VIEWS = ['ownerDash','ownerSettings','wipeShop','ownerManage','ownerPricing','ownerDayReport','ownerTransactions','ownerCashDetail','ownerFaulty'];
 function viewFor(v){
+  if(OWNER_ONLY_VIEWS.indexOf(v) !== -1 && !ADMIN_SESSION){
+    return screenAdminLogin();
+  }
   switch(v){
     case 'home': return screenHome();
     case 'staffShop': return screenStaffShop();
@@ -1010,7 +1115,7 @@ function screenStaffPicker(){
 async function loadStaffList(shopId){
   if(!sb){ SB_UNREACHABLE = true; STAFF_LIST_CACHE[shopId] = STAFF_LIST_CACHE[shopId] || []; return STAFF_LIST_CACHE[shopId]; }
   try{
-    const { data, error } = await sb.from('staff').select('id,name').eq('shop_id', shopId).eq('active', true).order('name');
+    const { data, error } = await sb.from('staff_public').select('id,name').eq('shop_id', shopId).eq('active', true).order('name');
     if(error) throw error;
     STAFF_LIST_CACHE[shopId] = data || [];
     (data||[]).forEach(s=>{ STAFF_NAME_INDEX[s.id] = s.name; });
@@ -1123,6 +1228,7 @@ function screenStaffDash(){
   const stockRows = stockKeys.map(k=>`
     <tr><td>${esc(k)}</td><td>${byModel[k]}</td><td>${byModel[k]<=threshold ? '<span class="chip chip-red">Re-up needed</span>' : '<span class="chip chip-green">OK</span>'}</td></tr>
   `).join('');
+  const stockTotal = stockKeys.reduce((a,k)=>a+byModel[k],0);
   const lowCount = stockKeys.filter(k=>byModel[k]<=threshold).length;
 
   const faultyList = data.inventory.filter(p=>p.status==='faulty').sort((a,b)=>(b.returnedTs||0)-(a.returnedTs||0));
@@ -1147,7 +1253,7 @@ function screenStaffDash(){
     ${faultyList.length>0 ? `<div class="section-flag">${faultyList.length} phone(s) on the faulty shelf - not for sale.</div>` : ''}
     <h2>Stock levels</h2>
     <div class="card">
-      ${stockRows ? `<table class="stock-table"><tr><th>Model</th><th>Qty</th><th>Status</th></tr>${stockRows}</table>` : '<div class="empty">No stock recorded.</div>'}
+      ${stockRows ? `<div class="table-scroll"><table class="stock-table"><tr><th>Model</th><th>Qty</th><th>Status</th></tr>${stockRows}<tr class="total-row"><td>Total</td><td>${stockTotal}</td><td></td></tr></table></div>` : '<div class="empty">No stock recorded.</div>'}
     </div>
 
     <h2>Faulty shelf</h2>
@@ -1707,8 +1813,9 @@ async function submitAdminLogin(){
   }
 }
 // Looks up whether a signed-in Supabase Auth user is registered as an admin,
-// and sets ADMIN_SESSION if so. Used both at login and to restore a session
-// that was already signed in (e.g. the page was reloaded).
+// and sets ADMIN_SESSION if so. Called right after a successful password
+// login - the client is created with persistSession:false, so there is no
+// stored session to restore on reload; the admin signs in fresh every time.
 async function resolveAdminSession(userId){
   if(!userId) return false;
   try{
@@ -1718,9 +1825,17 @@ async function resolveAdminSession(userId){
     return true;
   }catch(e){ return false; }
 }
-async function adminSignOut(){
+// The one place that drops an admin session, whether by explicit log-out or
+// because the app decided it shouldn't be held any more (e.g. entering the
+// staff flow). Always kills the underlying Supabase Auth token too, not just
+// the app-level flag, so nothing can silently resurrect it.
+async function clearAdminSession(){
+  if(!ADMIN_SESSION) return;
   ADMIN_SESSION = null;
   if(sb) try{ await sb.auth.signOut(); }catch(e){}
+}
+async function adminSignOut(){
+  await clearAdminSession();
   navHome();
 }
 
@@ -1956,10 +2071,12 @@ function renderStockByModel(data){
   const rows = Object.keys(byModel).sort().map(m=>`
     <tr><td>${esc(m)}</td><td>${byModel[m].count}</td><td>${money(byModel[m].value)}</td><td>${money(byModel[m].potential)}</td></tr>
   `).join('');
-  return `<table class="stock-table">
+  const totals = Object.values(byModel).reduce((a,x)=>({count:a.count+x.count, value:a.value+x.value, potential:a.potential+x.potential}), {count:0,value:0,potential:0});
+  return `<div class="table-scroll"><table class="stock-table">
     <tr><th>Model</th><th>Units</th><th>Cost value</th><th>Exp. profit</th></tr>
     ${rows}
-  </table>`;
+    <tr class="total-row"><td>Total</td><td>${totals.count}</td><td>${money(totals.value)}</td><td>${money(totals.potential)}</td></tr>
+  </table></div>`;
 }
 function renderStockByModelAll(allData){
   const byModel = {};
@@ -1974,14 +2091,21 @@ function renderStockByModelAll(allData){
   const keys = Object.keys(byModel).sort();
   if(keys.length===0) return '<div class="empty">No stock currently recorded in any shop.</div>';
   const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
-  return `<table class="stock-table">
+  const shopTotals = SHOPS.map(sh=>keys.reduce((a,k)=>a+(byModel[k].perShop[sh.id]||0),0));
+  const grandTotal = keys.reduce((a,k)=>a+byModel[k].total,0);
+  return `<div class="table-scroll"><table class="stock-table">
     <tr><th>Model</th>${SHOPS.map(sh=>`<th>${esc(sh.name.split(' ')[0])}${sh.id==='bulawayo2'?' 2':(sh.id==='bulawayo1'?' 1':'')}</th>`).join('')}<th>Total</th></tr>
     ${keys.map(k=>`<tr>
       <td>${esc(k)} ${byModel[k].total<=threshold?'<span class="chip chip-red">Re-up</span>':''}</td>
       ${SHOPS.map(sh=>`<td>${byModel[k].perShop[sh.id]||0}</td>`).join('')}
       <td><strong>${byModel[k].total}</strong></td>
     </tr>`).join('')}
-  </table>`;
+    <tr class="total-row">
+      <td>Total</td>
+      ${shopTotals.map(t=>`<td>${t}</td>`).join('')}
+      <td>${grandTotal}</td>
+    </tr>
+  </table></div>`;
 }
 function screenOwnerFaulty(){
   const shopId = S.mgmtShop;
@@ -2146,6 +2270,7 @@ function screenStockSheet(){
       </div>
     </div>
 
+    <div class="table-scroll">
     <table class="sheet-table">
       <tr>
         <th>Date</th><th>Model</th><th>Opening</th><th>Goods received</th><th>Sales</th><th>Closing</th><th>Amount</th><th style="width:22%;">Comments</th>
@@ -2171,8 +2296,10 @@ function screenStockSheet(){
         <td></td>
       </tr>
     </table>
+    </div>
 
-    <table class="sheet-table" style="margin-top:14px;">
+    <div class="table-scroll" style="margin-top:14px;">
+    <table class="sheet-table">
       <tr><th colspan="5">Faulty shelf</th></tr>
       <tr>
         <th style="text-transform:none;">Opening</th><th style="text-transform:none;">New faults</th><th style="text-transform:none;">Repaired</th><th style="text-transform:none;">Written off</th><th style="text-transform:none;">Closing</th>
@@ -2185,8 +2312,10 @@ function screenStockSheet(){
         <td class="num">${sheet.faulty.closing}</td>
       </tr>
     </table>
+    </div>
 
-    <table class="sheet-table" style="margin-top:14px;">
+    <div class="table-scroll" style="margin-top:14px;">
+    <table class="sheet-table">
       <tr><th colspan="4">Counted at end of day</th></tr>
       <tr>
         <th style="text-transform:none;">Good phones counted</th><th style="text-transform:none;">Faulty counted</th><th style="text-transform:none;">Cash collected</th><th style="text-transform:none;">Submitted by</th>
@@ -2198,6 +2327,7 @@ function screenStockSheet(){
         <td class="num">${log ? esc(log.submittedBy||'') : '&nbsp;'}</td>
       </tr>
     </table>
+    </div>
 
     <div class="sign-row">
       <div class="sign">Shop staff signature</div>
@@ -2314,7 +2444,7 @@ function screenOwnerSettings(){
 
     <h2>Add staff to ${esc(shopName(shopId))}</h2>
     <div class="field"><label>Name</label><input type="text" id="newStaffName" placeholder="e.g. Tendai"></div>
-    <div class="field"><label>Personal PIN (4+ digits &mdash; they'll use it to sign in)</label><input type="tel" inputmode="numeric" id="newStaffPin" placeholder="e.g. 4821"></div>
+    <div class="field"><label>Personal PIN (6+ digits &mdash; they'll use it to sign in)</label><input type="tel" inputmode="numeric" id="newStaffPin" maxlength="8" placeholder="e.g. 482197"></div>
     <div id="staffErr"></div>
     <button class="btn btn-outline btn-full-center" onclick="addStaff('${shopId}')">Add staff member</button>
 
@@ -2391,7 +2521,7 @@ function screenResetPin(){
   return `
   ${topbar('Reset PIN', target.name, true)}
   <div class="content">
-    <div class="field"><label>New PIN for ${esc(target.name)} (4+ digits)</label><input type="tel" inputmode="numeric" id="resetPinInput" placeholder="e.g. 4821" autofocus></div>
+    <div class="field"><label>New PIN for ${esc(target.name)} (6+ digits)</label><input type="tel" inputmode="numeric" id="resetPinInput" maxlength="8" placeholder="e.g. 482197" autofocus></div>
     <div id="resetPinErr"></div>
     <button class="btn btn-primary btn-full-center" onclick="submitResetPin()">Save new PIN</button>
     <button class="btn btn-outline btn-full-center" onclick="S.resetPinStaff=null;render();">Cancel</button>
@@ -2399,7 +2529,7 @@ function screenResetPin(){
 }
 async function submitResetPin(){
   const pin = document.getElementById('resetPinInput').value.trim();
-  if(!pin || pin.length<4){ document.getElementById('resetPinErr').innerHTML = '<div class="err">PIN needs at least 4 digits.</div>'; return; }
+  if(!pin || pin.length<6){ document.getElementById('resetPinErr').innerHTML = '<div class="err">PIN needs at least 6 digits.</div>'; return; }
   const res = await callRpc('admin_reset_staff_pin', {p_staff_id: S.resetPinStaff.id, p_new_pin: pin});
   if(!res.ok){ document.getElementById('resetPinErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>'; return; }
   S.resetPinStaff = null;
@@ -2409,7 +2539,7 @@ async function addStaff(shopId){
   const name = document.getElementById('newStaffName').value.trim();
   const pin = document.getElementById('newStaffPin').value.trim();
   if(!name){ document.getElementById('staffErr').innerHTML = '<div class="err">Enter the staff member\'s name.</div>'; return; }
-  if(!pin || pin.length<4){ document.getElementById('staffErr').innerHTML = '<div class="err">PIN needs at least 4 digits.</div>'; return; }
+  if(!pin || pin.length<6){ document.getElementById('staffErr').innerHTML = '<div class="err">PIN needs at least 6 digits.</div>'; return; }
   const res = await callRpc('admin_set_staff_pin', {p_shop_id: shopId, p_name: name, p_pin: pin});
   if(!res.ok){ document.getElementById('staffErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>'; return; }
   delete ADMIN_STAFF_CACHE[shopId];
@@ -2906,17 +3036,17 @@ async function init(){
     if(window.__SB_OVERRIDE__){
       sb = window.__SB_OVERRIDE__;
     } else if(window.supabase && typeof window.supabase.createClient === 'function'){
-      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      // Shop-floor phones must not carry a live admin session between visits -
+      // a saved session is one tap from cost prices, profit and the wipe-shop
+      // screen. The admin signs in fresh every time the app is opened; staff
+      // PIN entry is unaffected since it never goes through Supabase Auth.
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
     } else {
       sb = null;
     }
-    if(sb){
-      try{
-        const { data } = await sb.auth.getSession();
-        const userId = data && data.session && data.session.user && data.session.user.id;
-        if(userId) await resolveAdminSession(userId);
-      }catch(e){ /* no existing session to restore - carry on signed out */ }
-    }
+    // persistSession:false means there is never a stored session to restore
+    // here - the app always starts signed out, and the admin logs in fresh
+    // through the login screen (see submitAdminLogin).
     await loadSettings();
     await loadShopsAndModels();
     render();
@@ -2930,6 +3060,7 @@ window.addEventListener('error', function(ev){
     showFatal(ev.error || ev.message);
   }
 });
+window.addEventListener('resize', function(){ updateTableFades(); });
 init();
 </script>
 </body>

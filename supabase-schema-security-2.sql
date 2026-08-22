@@ -1,0 +1,113 @@
+-- ============================================================================
+-- TOWDAH ELECTRONICS SHOP TRACKER — Security Part 2: removals only
+-- ============================================================================
+-- ██████████████████████████████████████████████████████████████████████████
+-- █  DO NOT RUN THIS UNTIL THE APP IS DEPLOYED WITH THE index.html CHANGE   █
+-- █  DELIVERED ALONGSIDE SECURITY PART 1 (staff picker + ensureStaffNames   █
+-- █  reading staff_public; refreshShopData reading daily_logs through      █
+-- █  staff_recent_daily_logs for non-admin sessions) - AND security-1.sql  █
+-- █  ITSELF MUST HAVE ALREADY RUN, since this file removes the two         █
+-- █  policies that are the only thing keeping the OLD app working while    █
+-- █  the new one rolls out.                                                █
+-- █                                                                          █
+-- █  Running this file too early breaks two things immediately:            █
+-- █   - the staff picker's only way to list names, before the new app is   █
+-- █     live, is a direct unauthenticated read of staff; this file removes █
+-- █     the policy that allows that.                                       █
+-- █   - the staff menu's "already submitted today" check and the End of    █
+-- █     day screen's pre-fill, before the new app is live, are a direct    █
+-- █     unauthenticated read of daily_logs; this file removes that policy  █
+-- █     too.                                                                █
+-- █  Run order, no exceptions: security-1.sql -> deploy app -> confirm a   █
+-- █  staff device works -> THIS FILE.                                      █
+-- ██████████████████████████████████████████████████████████████████████████
+--
+-- WHY THIS EXISTS
+-- security-1.sql was entirely additive: new view, new function, three
+-- functions re-created with unchanged logic. It deliberately left
+-- staff_read_names and daily_logs_anon_read in place so nothing broke
+-- mid-deploy. This file is the removal half: once the app is confirmed to
+-- be using the new doors from part 1, the two wide-open policies aren't
+-- needed by anyone legitimate any more, so they come off.
+--
+-- staff_read_names on staff let anyone with the anon key read pin_hash for
+-- every staff member. daily_logs_anon_read on daily_logs let anyone with
+-- the anon key read every shop's cash figures, forever - found while
+-- auditing every other {public}/qual=true policy per the owner's request,
+-- and folded into the same pair of files rather than left for later.
+--
+-- REALITY CHECK — READ THIS BEFORE RUNNING
+-- The original plan for the staff half of this file included rewriting
+-- staff_login "hash-only, no plain-pin fallback" and dropping a plain `pin`
+-- column. Neither applies: staff_login has never had a plain-pin fallback
+-- (see security-1.sql's own reality check - there was never a plaintext PIN
+-- in this database), and there is no `pin` column to drop - only pin_hash
+-- exists, and it's already NOT NULL. The DROP COLUMN statement below is
+-- kept anyway, written as `drop column if exists`, purely as a safe no-op /
+-- belt-and-suspenders statement: it does nothing today, and only matters if
+-- a `pin` column is ever reintroduced by mistake later.
+--
+-- THE ADMIN PATH NEEDS NOTHING FROM THIS FILE
+-- refreshShopData reads `daily_logs` directly for admin sessions
+-- (unconditionally, unchanged) - checked in index.html before writing this
+-- pair of files, not assumed. daily_logs_admin_all ({public}, ALL,
+-- is_admin()) already existed before any of this work started, is
+-- independent of daily_logs_anon_read, and is not touched by dropping it
+-- here. Admin screens keep working with no new policy added in this file.
+--
+-- WHAT THIS REMOVES (nothing in this file creates anything new)
+--   staff_read_names      — DROPPED.
+--   staff_admin_read      — added as staff_read_names' direct replacement,
+--                            in the same file, so the table is never left
+--                            with zero SELECT policies in between: admin-
+--                            only SELECT on the real staff table
+--                            (is_admin(), same guard as every admin_*
+--                            function). Lets the admin Settings staff list
+--                            keep reading the real table exactly as it
+--                            does today.
+--   staff.pin              — drop column if exists (no-op today; see
+--                            reality check above).
+--   daily_logs_anon_read  — DROPPED. No replacement needed in this file -
+--                            staff_recent_daily_logs (security-1.sql) and
+--                            daily_logs_admin_all (already existed) between
+--                            them already cover everyone who's supposed to
+--                            read this table.
+--
+-- WHAT THIS LEAVES ALONE
+--   staff_public, staff_recent_daily_logs, and the three functions from
+--   Part 1 - untouched here, already correct. Both new doors keep working
+--   after this file because they bypass RLS via their own privileges
+--   (view ownership / SECURITY DEFINER), not via either dropped policy.
+--   daily_logs_admin_all - untouched. Admin keeps full read/write on
+--   daily_logs exactly as today; only the anon-wide-open policy is removed.
+--   Every other table's policies - see the full audit delivered in chat
+--   this session, not repeated here.
+--   Realtime push for daily_logs changes will quietly stop reaching staff
+--   devices after this runs (Supabase Realtime only forwards a change to a
+--   client that could still SELECT the row under RLS, and staff no longer
+--   can, directly). The app's own code already treats realtime as a
+--   best-effort snappiness upgrade with the 15-second poll as the real
+--   sync mechanism, so this doesn't break anything - noting it so it isn't
+--   mistaken for a bug later if it's ever noticed.
+-- ============================================================================
+
+drop policy if exists staff_read_names on staff;
+
+create policy staff_admin_read on staff for select using (is_admin());
+
+-- No-op today (no `pin` column exists) - kept only so a future accidental
+-- reintroduction of a plaintext column doesn't survive unnoticed.
+alter table staff drop column if exists pin;
+
+drop policy if exists daily_logs_anon_read on daily_logs;
+
+-- ============================================================================
+-- Done. After this runs: confirm a staff device can still sign in (reads
+-- staff_public, unaffected) and that the staff menu correctly shows today's
+-- business-day/end-of-day status (reads staff_recent_daily_logs,
+-- unaffected); confirm Settings' staff list still works for admin (reads
+-- staff directly, now admin-gated instead of wide open); confirm the admin
+-- dashboard still shows cash figures (reads daily_logs directly, still
+-- covered by the pre-existing daily_logs_admin_all policy, untouched by
+-- this file).
+-- ============================================================================
