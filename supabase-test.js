@@ -6,7 +6,7 @@
 // original resilience-test.js used for window.storage.
 const { chromium } = require('playwright');
 const path = require('path');
-const FILE = 'file://' + path.resolve('/home/claude/shop-tracker.html');
+const FILE = 'file://' + path.resolve(__dirname, 'index.html');
 let failures = 0;
 const check = (n, c, x) => { if (c) console.log('  PASS  ' + n); else { failures++; console.log('  FAIL  ' + n + (x ? ' :: ' + x : '')); } };
 
@@ -60,6 +60,11 @@ function createBackend(){
     else if(state.table==='daily_logs'){ rows = db.daily_logs; }
     else if(state.table==='business_days'){ rows = db.business_days; }
     else if(state.table==='staff'){ rows = db.staff.map(s=>({id:s.id, name:s.name, shop_id:s.shop_id, active:s.active})); }
+    // Mirrors the real staff_public view (security-staff-pins work): same
+    // redacted column set as 'staff' above, minus pin_hash - added so
+    // loadStaffList/ensureStaffNames (which query staff_public, not staff
+    // directly, since RLS blocks anon reads on the raw table) can be tested.
+    else if(state.table==='staff_public'){ rows = db.staff.map(s=>({id:s.id, name:s.name, shop_id:s.shop_id, active:s.active})); }
     else if(state.table==='admins'){ rows = db.admins; }
     else if(state.table==='settings'){ rows = [{ id:true, low_stock_threshold: db.settings.low_stock_threshold }]; }
     else if(state.table==='shop_resets'){ if(!isAdmin()) throw new Error('permission denied'); rows = db.shop_resets; }
@@ -176,6 +181,19 @@ function createBackend(){
       db.ledger.push({id:nid(), shop_id:p_shop_id, ts:nowIso(), type:'eod', phone_id:null, model:null, description:null, imei:null, price:null, by_staff:p_staff_id, by_admin:null,
         note:'End of day: '+p_physical_count+' good, '+p_faulty_count+' faulty, '+p_cash+' cash'+(resubmit?' (replaced an earlier submission)':''), extra:null});
       return { data:null, error:null };
+    },
+    // Mirrors the real staff_recent_daily_logs (security-staff-pins work):
+    // one shop's daily_logs, last 60 days, newest first. Added so
+    // refreshShopData's non-admin path - which calls this RPC instead of
+    // reading daily_logs directly, since anon can no longer read that table
+    // wide-open - has something to talk to in tests.
+    staff_recent_daily_logs({p_shop_id}){
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 60);
+      const cutoffStr = cutoff.toISOString().slice(0,10);
+      const rows = db.daily_logs
+        .filter(l=>l.shop_id===p_shop_id && l.date >= cutoffStr)
+        .slice().sort((a,b)=> b.date.localeCompare(a.date));
+      return { data: rows, error:null };
     },
     staff_open_day({p_shop_id, p_staff_id, p_local_date}){
       const staff = db.staff.find(x=>x.id===p_staff_id && x.shop_id===p_shop_id && x.active);
@@ -472,7 +490,7 @@ const tap = async (page, txt) => {
 const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+  const browser = await chromium.launch();
 
   // ===========================================================================
   console.log('\n== A. Staff sign-in: shop -> personal name -> personal PIN ==');
@@ -645,18 +663,18 @@ const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.
 
   console.log('\n== H. Settings: add staff, reset PIN, deactivate — deactivated staff cannot sign in ==');
   await tap(page, 'Settings');
-  await page.fill('#newStaffName', 'Rudo'); await page.fill('#newStaffPin', '9012');
+  await page.fill('#newStaffName', 'Rudo'); await page.fill('#newStaffPin', '901234');
   await tap(page, 'Add staff member');
   t = await page.locator('#app').innerText();
   check('new staff member appears in the list', /Rudo/.test(t), t.slice(0,200));
   const rudo = backend.db.staff.find(s=>s.name==='Rudo');
-  check('new staff PIN stored', rudo && rudo.pin==='9012');
+  check('new staff PIN stored', rudo && rudo.pin==='901234');
 
   await tap(page, 'Deactivate');
   await tap(page, 'Yes, deactivate');
   t = await page.locator('#app').innerText();
   check('deactivated staff shown as Deactivated', /Deactivated/.test(t), t.slice(0,300));
-  const rawLogin = JSON.parse(await backend.handle(JSON.stringify({kind:'rpc', name:'staff_login', params:{p_staff_id: rudo.id, p_pin:'9012'}})));
+  const rawLogin = JSON.parse(await backend.handle(JSON.stringify({kind:'rpc', name:'staff_login', params:{p_staff_id: rudo.id, p_pin:'901234'}})));
   check('deactivated staff can no longer sign in even with the right PIN', rawLogin.data.length===0, JSON.stringify(rawLogin));
 
   console.log('\n== H2. Danger zone: clear all demo/test data for a shop (admin only, permanent) ==');
@@ -747,6 +765,12 @@ const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.
   check('no shop was actually added', !shopBackend.db.shops.some(s=>s.name==='Mutare Branch'));
 
   console.log('\n== K3. Closing a shop hides it from the staff picker but keeps its history ==');
+  // persistSession:false (main's shop-floor-phone hardening) means the reload
+  // in section I above signed the admin back out - re-authenticate before
+  // reaching another admin-only screen, same credentials seeded in section F.
+  await tap(page, 'Admin dashboard');
+  await page.fill('#adminEmail', 'owner@towdah.com'); await page.fill('#adminPass', 'correcthorse');
+  await tap(page, 'Log in');
   await tap(page, 'Settings');
   await page.locator('.list-item:has-text("Bulawayo Shop 1")').locator('button:text-is("Close")').click();
   await page.waitForTimeout(150);
