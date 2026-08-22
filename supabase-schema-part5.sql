@@ -53,9 +53,12 @@
 -- PRE-FLIGHT CHECK (must pass before the new index is created)
 -- The new unique rule can only be created if no two existing phones already
 -- share the same (imei, model_key). The SELECT below lists any such
--- collisions. If it returns rows, the index creation will fail loudly rather
--- than silently dropping data — that is intended. Fix the duplicates, then
--- re-run this file.
+-- collisions, and is written to run standalone against today's schema - it
+-- inlines clean_model_key's cleaning expression rather than referencing
+-- phones.model_key or the clean_model_key() function, since neither exists
+-- until this file creates them further down. If it returns rows, the index
+-- creation will fail loudly rather than silently dropping data — that is
+-- intended. Fix the duplicates, then re-run this file.
 --
 -- CLOSING, NOT DELETING
 -- A shop is closed, never deleted. Its history stays readable forever; it
@@ -317,14 +320,34 @@ alter table phones add column if not exists model_key text
   generated always as (clean_model_key(model)) stored;
 
 
--- ---- PRE-FLIGHT CHECK: run and read this before trusting the index below --
--- If this returns any rows, two existing phones already collide on
--- (imei, model_key) and the unique index further down WILL fail to create.
--- Fix those rows first (they are almost certainly a genuine duplicate entry
--- that predates this migration), then re-run this file.
-select imei, model_key, count(*) as how_many, array_agg(id) as phone_ids
+-- ---- PRE-FLIGHT CHECK: run this block on its own, before anything else in
+-- this file, against the CURRENT (unmigrated) schema -------------------------
+-- If this returns any rows, two existing phones already collide on what will
+-- become (imei, model_key), and the unique index further down WILL fail to
+-- create. Fix those rows first (they are almost certainly a genuine
+-- duplicate entry that predates this migration), then re-run this file.
+--
+-- CANNOT reference phones.model_key or clean_model_key() here - both are
+-- created BY this file, further down, and don't exist yet on a database this
+-- has never run against. That was a real bug in an earlier version of this
+-- check: it referenced model_key directly and failed with
+-- "column model_key does not exist" the one time it actually needed to run
+-- standalone, which is a pre-flight check proving nothing.
+-- Fixed by inlining clean_model_key's exact expression instead of the
+-- column/function, so this reads only pre-existing columns:
+--
+--   clean_model_key(p) body:  lower(regexp_replace(trim(coalesce(p, '')), '\s+', ' ', 'g'))
+--   inlined below, p -> model: lower(regexp_replace(trim(coalesce(model, '')), '\s+', ' ', 'g'))
+--
+-- Copied verbatim from the function definition above, not rewritten from
+-- memory - if this cleans a name even slightly differently than the
+-- migration will, the check proves nothing.
+select imei,
+       lower(regexp_replace(trim(coalesce(model, '')), '\s+', ' ', 'g')) as model_key,
+       count(*) as how_many,
+       array_agg(id) as phone_ids
 from phones
-group by imei, model_key
+group by imei, lower(regexp_replace(trim(coalesce(model, '')), '\s+', ' ', 'g'))
 having count(*) > 1;
 
 do $$
