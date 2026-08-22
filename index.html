@@ -1652,10 +1652,19 @@ function confirmLine(){
   const imeis = inputs.map(inp=>inp.value.trim());
   if(imeis.some(v=>!v)){ document.getElementById('recvImeiErr').innerHTML = '<div class="err">Enter every IMEI before continuing.</div>'; return; }
   const data = SHOP_CACHE[S.shopId];
-  const existingImeis = new Set(data.inventory.map(p=>p.imei));
-  (S.receiveBatch.lines||[]).forEach(l=>l.imeis.forEach(im=>existingImeis.add(im)));
-  const dupes = imeis.filter(im=>existingImeis.has(im));
-  if(dupes.length>0){ document.getElementById('recvImeiErr').innerHTML = '<div class="err">One or more IMEIs are already recorded: '+esc(dupes.join(', '))+'</div>'; return; }
+  // (imei, model) is the real rule, not imei alone - two real phones can
+  // legitimately share an IMEI across different models. cleanModelKey() is
+  // computed here rather than read off phones_staff_view's model_key column,
+  // so this stays correct even if that column is momentarily unavailable -
+  // it only ever needs `model`, which every row always has.
+  const modelKey = cleanModelKey(d.model);
+  const existingPairs = new Set(data.inventory.map(p=>p.imei+'|'+cleanModelKey(p.model)));
+  (S.receiveBatch.lines||[]).forEach(l=>{
+    const lineKey = cleanModelKey(l.model);
+    l.imeis.forEach(im=>existingPairs.add(im+'|'+lineKey));
+  });
+  const dupes = imeis.filter(im=>existingPairs.has(im+'|'+modelKey));
+  if(dupes.length>0){ document.getElementById('recvImeiErr').innerHTML = '<div class="err">Already recorded: '+esc(dupes.map(im=>im+' ('+d.model+')').join(', '))+'</div>'; return; }
   S.receiveBatch.lines.push({batchId: genBatchId(), model: d.model, description: d.description, qty: d.qty, imeis});
   S.receiveLineDraft = null;
   S.receiveStep = 'batchSummary';

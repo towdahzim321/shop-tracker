@@ -44,7 +44,23 @@ function createBackend(){
   function isAdmin(){ return !!(session && db.admins.find(a=>a.user_id===session.userId)); }
   function adminUsername(){ const a = session && db.admins.find(x=>x.user_id===session.userId); return a ? a.username : 'admin'; }
 
-  function phoneStaffRow(p){ const { cost_price, ...rest } = p; return rest; }
+  // Pinned to the REAL phones_staff_view's exact column list (confirmed
+  // against the live schema dump), not "everything except cost_price" - that
+  // was more generous than reality and let a client bug (comparing on bare
+  // imei because it had no model_key to compare against) pass 46/46 anyway,
+  // since the mock was quietly handing back fields the real view never did.
+  function phoneStaffRow(p){
+    return {
+      id: p.id, shop_id: p.shop_id, imei: p.imei, model: p.model, description: p.description,
+      batch_id: p.batch_id, status: p.status, date_received: p.date_received, received_ts: p.received_ts,
+      received_by: p.received_by, sale_price: p.sale_price, sold_by: p.sold_by, date_sold: p.date_sold,
+      sold_ts: p.sold_ts, below_price: p.below_price, price_shortfall: p.price_shortfall,
+      return_reason: p.return_reason, fault_parts: p.fault_parts, return_notes: p.return_notes,
+      date_returned: p.date_returned, returned_ts: p.returned_ts, repaired_at: p.repaired_at,
+      repaired_by: p.repaired_by, written_off_at: p.written_off_at, written_off_by: p.written_off_by,
+      date_written_off: p.date_written_off, list_price: p.list_price
+    };
+  }
   function ledgerStaffRow(l){ if(l.type==='price_set') return null; return { ...l, price: l.type==='written_off' ? null : l.price }; }
 
   function applyFilters(rows, filters){
@@ -555,6 +571,28 @@ const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.
   check('switching back to the list returns to the model grid', /What model is this/.test(t), t.slice(0,200));
   await tap(page, 'Back');
 
+  // The client-side check just above (line ~536) proved confirmLine() blocks
+  // a genuine repeat. This proves the other half: it must NOT block a
+  // same-IMEI, different-model entry either - that's a real, different phone
+  // and staff would be stuck unable to record it if the client's own
+  // duplicate check doesn't understand model the same way the server does.
+  // Uses a manually-typed model (not the picker) since this mock only ever
+  // seeds Galaxy A55 - and a model distinct from the iPhone 12 used in the
+  // server-only checks below, so this doesn't collide with those.
+  await tap(page, 'Received new stock');
+  await tap(page, 'Not listed - type it in');
+  await page.fill('#recvModel', 'iPhone 13');
+  await page.fill('#recvQty', '1');
+  await tap(page, 'Next: enter IMEIs');
+  await page.locator('.imeiRow').first().fill('111111111111111'); // same IMEI as the Galaxy A55 already in stock
+  await tap(page, 'Add this item to the document');
+  t = await page.locator('#app').innerText();
+  check('same IMEI + a different model is accepted by the CLIENT check, not flagged as already recorded', !/already recorded/i.test(t) && /Items in this document/.test(t), t.slice(0,300));
+  await tap(page, 'Finish: save document to stock');
+  t = await page.locator('#app').innerText();
+  check('the client-accepted phone actually saved', /1 phone\(s\) added to stock/.test(t), t.slice(0,150));
+  check('mock database now has the same IMEI recorded under two different models', backend.db.phones.filter(p=>p.imei==='111111111111111').length===2, JSON.stringify(backend.db.phones.filter(p=>p.imei==='111111111111111').map(p=>p.model)));
+
   // The client-side check above only catches duplicates against data this
   // device already has loaded. Prove the *database* independently enforces
   // the real rule - (imei, model), not imei alone - the scenario this
@@ -786,6 +824,29 @@ const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.
   check('a closed shop no longer appears in the staff shop picker', !/Bulawayo Shop 1/.test(t), t.slice(0,300));
   check('the other open shops still do', /Harare CBD/.test(t) && /Bulawayo Shop 2/.test(t), t.slice(0,300));
   check("the closed shop's phone history is still on record, untouched", backend.db.phones.some(p=>p.shop_id==='bulawayo1'), JSON.stringify(backend.db.phones.filter(p=>p.shop_id==='bulawayo1').map(p=>p.id)));
+
+  console.log('\n== L. cleanModelKey() (JS) must never drift from clean_model_key() (SQL) ==');
+  // These input/expected pairs mirror clean_model_key() in
+  // supabase-schema-part5.sql exactly - trim, collapse any run of internal
+  // whitespace to one space, lowercase. The two functions decide the same
+  // thing (is this a duplicate model?) from two different runtimes with no
+  // way to check each other at request time, so if they ever drift apart the
+  // app and the database will disagree about what a duplicate is, and that
+  // will be very hard to spot from the outside. If you change either
+  // cleanModelKey() (index.html) or clean_model_key() (part 5), change the
+  // other the same way and update this list to match.
+  const MODEL_KEY_CASES = [
+    ['Galaxy  A15', 'galaxy a15'],
+    [' galaxy a15 ', 'galaxy a15'],
+    ['GALAXY A15', 'galaxy a15'],
+    ['Galaxy\tA15', 'galaxy a15'],
+    ['iPhone 12  Pro Max', 'iphone 12 pro max'],
+    ['', '']
+  ];
+  for(const [input, expected] of MODEL_KEY_CASES){
+    const actual = await page.evaluate((s)=>cleanModelKey(s), input);
+    check('cleanModelKey('+JSON.stringify(input)+') === '+JSON.stringify(expected), actual===expected, 'got '+JSON.stringify(actual));
+  }
 
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL SUPABASE-REWRITE CHECKS PASSED' : failures + ' FAILED'));
