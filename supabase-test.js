@@ -41,6 +41,22 @@ function createBackend(){
   const nid = () => 'id' + (idc++);
   const nowIso = () => new Date(Date.now() + (idc++)).toISOString();
   const err = (msg) => ({ message: msg, code: 'P0001' });
+
+  // Mirrors idempotency_begin/idempotency_finish (supabase-schema-part6):
+  // a key not seen before reserves itself and lets the caller proceed; a key
+  // seen before returns whatever was recorded (which may itself be `null`)
+  // instead of running the write again. {seen:false} vs {seen:true, result}
+  // is used here rather than JS's single null, specifically to avoid the
+  // real trap the SQL header warns about: a stored result of null must still
+  // mean "already done," not "brand new, proceed."
+  const idemStore = {};
+  function idemBegin(key){
+    if(key==null) return { seen:false };
+    if(Object.prototype.hasOwnProperty.call(idemStore, key)) return { seen:true, result: idemStore[key] };
+    idemStore[key] = null;
+    return { seen:false };
+  }
+  function idemFinish(key, result){ if(key!=null) idemStore[key] = result; }
   function isAdmin(){ return !!(session && db.admins.find(a=>a.user_id===session.userId)); }
   function adminUsername(){ const a = session && db.admins.find(x=>x.user_id===session.userId); return a ? a.username : 'admin'; }
 
@@ -115,7 +131,9 @@ function createBackend(){
       const s = db.staff.find(x=>x.id===p_staff_id && x.active && x.pin===p_pin);
       return { data: s ? [{id:s.id, name:s.name, shop_id:s.shop_id}] : [], error:null };
     },
-    staff_receive_stock({p_shop_id, p_staff_id, p_local_date, p_items}){
+    staff_receive_stock({p_shop_id, p_staff_id, p_local_date, p_items, p_idempotency_key}){
+      const seen = idemBegin(p_idempotency_key);
+      if(seen.seen) return { data: seen.result, error:null }; // mirrors real fn: replay hands back the ORIGINAL count, not re-inserts
       const staff = db.staff.find(x=>x.id===p_staff_id && x.shop_id===p_shop_id && x.active);
       if(!staff) return { data:null, error: err('Staff member not recognised for this shop.') };
       const day = db.business_days.find(b=>b.shop_id===p_shop_id && b.date===p_local_date);
@@ -155,9 +173,12 @@ function createBackend(){
           count++;
         });
       });
+      idemFinish(p_idempotency_key, count);
       return { data: count, error:null };
     },
-    staff_sell_phone({p_shop_id, p_staff_id, p_local_date, p_phone_id, p_price}){
+    staff_sell_phone({p_shop_id, p_staff_id, p_local_date, p_phone_id, p_price, p_idempotency_key}){
+      const seen = idemBegin(p_idempotency_key);
+      if(seen.seen) return { data:null, error:null }; // void RPC - already recorded, nothing more to do
       const staff = db.staff.find(x=>x.id===p_staff_id && x.shop_id===p_shop_id && x.active);
       if(!staff) return { data:null, error: err('Staff member not recognised for this shop.') };
       const day = db.business_days.find(b=>b.shop_id===p_shop_id && b.date===p_local_date);
@@ -169,9 +190,12 @@ function createBackend(){
       if(ph.list_price!=null && p_price < ph.list_price){ below=true; short = Math.round((ph.list_price-p_price)*100)/100; }
       Object.assign(ph, {status:'sold', sale_price:p_price, sold_by:p_staff_id, date_sold:p_local_date, sold_ts:nowIso(), below_price:below, price_shortfall:short});
       db.ledger.push({id:nid(), shop_id:p_shop_id, ts:nowIso(), type:'sold', phone_id:ph.id, model:ph.model, description:ph.description, imei:ph.imei, price:p_price, by_staff:p_staff_id, by_admin:null, note:null, extra:{belowPrice:below, shortfall:short}});
+      idemFinish(p_idempotency_key, true);
       return { data:null, error:null };
     },
-    staff_return_phone({p_shop_id, p_staff_id, p_local_date, p_phone_id, p_reason, p_fault_parts, p_notes}){
+    staff_return_phone({p_shop_id, p_staff_id, p_local_date, p_phone_id, p_reason, p_fault_parts, p_notes, p_idempotency_key}){
+      const seen = idemBegin(p_idempotency_key);
+      if(seen.seen) return { data:null, error:null }; // void RPC - already recorded, nothing more to do
       const staff = db.staff.find(x=>x.id===p_staff_id && x.shop_id===p_shop_id && x.active);
       if(!staff) return { data:null, error: err('Staff member not recognised for this shop.') };
       const day = db.business_days.find(b=>b.shop_id===p_shop_id && b.date===p_local_date);
@@ -182,9 +206,12 @@ function createBackend(){
       const faulty = p_reason==='Faulty';
       Object.assign(ph, {status: faulty?'faulty':'in_stock', return_reason:p_reason, fault_parts:p_fault_parts, return_notes:p_notes, date_returned:p_local_date, returned_ts:nowIso()});
       db.ledger.push({id:nid(), shop_id:p_shop_id, ts:nowIso(), type:'returned', phone_id:ph.id, model:ph.model, description:ph.description, imei:ph.imei, price:null, by_staff:p_staff_id, by_admin:null, note:null, extra:{reason:p_reason, faultParts:p_fault_parts, notes:p_notes, toFaulty:faulty}});
+      idemFinish(p_idempotency_key, true);
       return { data:null, error:null };
     },
-    staff_submit_eod({p_shop_id, p_staff_id, p_local_date, p_physical_count, p_faulty_count, p_cash}){
+    staff_submit_eod({p_shop_id, p_staff_id, p_local_date, p_physical_count, p_faulty_count, p_cash, p_idempotency_key}){
+      const seen = idemBegin(p_idempotency_key);
+      if(seen.seen) return { data:null, error:null }; // void RPC - already recorded, nothing more to do
       const staff = db.staff.find(x=>x.id===p_staff_id && x.shop_id===p_shop_id && x.active);
       if(!staff) return { data:null, error: err('Staff member not recognised for this shop.') };
       const day = db.business_days.find(b=>b.shop_id===p_shop_id && b.date===p_local_date);
@@ -196,6 +223,7 @@ function createBackend(){
       Object.assign(log, {physical_count:p_physical_count, faulty_count:p_faulty_count, cash:p_cash, submitted_by:p_staff_id, submitted_at:nowIso()});
       db.ledger.push({id:nid(), shop_id:p_shop_id, ts:nowIso(), type:'eod', phone_id:null, model:null, description:null, imei:null, price:null, by_staff:p_staff_id, by_admin:null,
         note:'End of day: '+p_physical_count+' good, '+p_faulty_count+' faulty, '+p_cash+' cash'+(resubmit?' (replaced an earlier submission)':''), extra:null});
+      idemFinish(p_idempotency_key, true);
       return { data:null, error:null };
     },
     // Mirrors the real staff_recent_daily_logs (security-staff-pins work):
@@ -421,8 +449,14 @@ function createBackend(){
     }
   }
 
+  // Every RPC call the client actually sends, in order - lets a test driven
+  // through the real UI (taps, not raw backend.handle() calls) inspect what
+  // p_idempotency_key was actually on the wire for each submission, rather
+  // than just asserting on the resulting db state.
+  const calls = [];
   return {
     db,
+    calls,
     setNetworkDown(v){ networkDown = v; },
     seed({staff, admins, authUsers, models}){
       (staff||[]).forEach(s=>db.staff.push(s));
@@ -437,8 +471,9 @@ function createBackend(){
         if(req.kind==='rpc'){
           if(networkDown) throw new Error('network down');
           const fn = RPCS[req.name];
-          if(!fn) return JSON.stringify({data:null, error:{message:'unknown rpc '+req.name}});
-          return JSON.stringify(fn(req.params||{}));
+          const result = fn ? fn(req.params||{}) : {data:null, error:{message:'unknown rpc '+req.name}};
+          calls.push({name: req.name, params: req.params, result});
+          return JSON.stringify(result);
         }
         if(req.kind==='signIn'){
           if(networkDown) throw new Error('network down');
@@ -847,6 +882,123 @@ const today = () => { const d = new Date(); return d.getFullYear()+'-'+String(d.
     const actual = await page.evaluate((s)=>cleanModelKey(s), input);
     check('cleanModelKey('+JSON.stringify(input)+') === '+JSON.stringify(expected), actual===expected, 'got '+JSON.stringify(actual));
   }
+
+  console.log('\n== M. Idempotency pilot: staff_sell_phone (supabase-schema-part6a) ==');
+  const idemBackend = createBackend();
+  idemBackend.seed({ staff: [{id:'sM', shop_id:'harare', name:'Panashe', pin:'5566', active:true}] });
+  idemBackend.db.phones.push({id:'pM', shop_id:'harare', imei:'444444444444444', model:'Galaxy A55', description:null,
+    batch_id:'bm', cost_price:100, list_price:180, status:'in_stock', date_received: today(), received_ts:new Date().toISOString(),
+    received_by:'sM', sale_price:null, sold_by:null, date_sold:null, sold_ts:null, below_price:false, price_shortfall:0,
+    return_reason:null, fault_parts:null, return_notes:null, date_returned:null, returned_ts:null,
+    repaired_at:null, repaired_by:null, written_off_at:null, written_off_by:null, date_written_off:null});
+  await idemBackend.handle(JSON.stringify({kind:'rpc', name:'staff_open_day', params:{p_shop_id:'harare', p_staff_id:'sM', p_local_date: today()}}));
+
+  const saleKey = 'k-11111111-1111-1111-1111-111111111111';
+  const firstSale = JSON.parse(await idemBackend.handle(JSON.stringify({kind:'rpc', name:'staff_sell_phone',
+    params:{p_shop_id:'harare', p_staff_id:'sM', p_local_date: today(), p_phone_id:'pM', p_price:150, p_idempotency_key:saleKey}})));
+  check('first call with a fresh key succeeds', !firstSale.error, JSON.stringify(firstSale));
+
+  const retrySale = JSON.parse(await idemBackend.handle(JSON.stringify({kind:'rpc', name:'staff_sell_phone',
+    params:{p_shop_id:'harare', p_staff_id:'sM', p_local_date: today(), p_phone_id:'pM', p_price:150, p_idempotency_key:saleKey}})));
+  check('retry with the SAME key also reports success, not "no longer available for sale"', !retrySale.error, JSON.stringify(retrySale));
+  check('exactly one sale is on record - the retry did not create a second one', idemBackend.db.ledger.filter(l=>l.type==='sold' && l.phone_id==='pM').length===1, JSON.stringify(idemBackend.db.ledger.filter(l=>l.phone_id==='pM')));
+  check('the phone itself only shows one sale price, not overwritten twice with side effects', idemBackend.db.phones.find(p=>p.id==='pM').sale_price===150);
+
+  const newAttemptResult = JSON.parse(await idemBackend.handle(JSON.stringify({kind:'rpc', name:'staff_sell_phone',
+    params:{p_shop_id:'harare', p_staff_id:'sM', p_local_date: today(), p_phone_id:'pM', p_price:160, p_idempotency_key:'k-22222222-2222-2222-2222-222222222222'}})));
+  check('a genuinely NEW key against the same now-sold phone still gets the real refusal - this suppresses a repeated key, not sales in general', newAttemptResult.error && /no longer available for sale/i.test(newAttemptResult.error.message), JSON.stringify(newAttemptResult));
+
+  console.log('\n== N. Idempotency pilot: staff_return_phone (supabase-schema-part6d) ==');
+  idemBackend.db.phones.push({id:'pN', shop_id:'harare', imei:'555555555555555', model:'Galaxy A55', description:null,
+    batch_id:'bn', cost_price:100, list_price:180, status:'sold', date_received: today(), received_ts:new Date().toISOString(),
+    received_by:'sM', sale_price:150, sold_by:'sM', date_sold: today(), sold_ts:new Date().toISOString(), below_price:false, price_shortfall:0,
+    return_reason:null, fault_parts:null, return_notes:null, date_returned:null, returned_ts:null,
+    repaired_at:null, repaired_by:null, written_off_at:null, written_off_by:null, date_written_off:null});
+
+  const returnKey = 'k-33333333-3333-3333-3333-333333333333';
+  const firstReturn = JSON.parse(await idemBackend.handle(JSON.stringify({kind:'rpc', name:'staff_return_phone',
+    params:{p_shop_id:'harare', p_staff_id:'sM', p_local_date: today(), p_phone_id:'pN', p_reason:'Changed mind', p_fault_parts:null, p_notes:null, p_idempotency_key:returnKey}})));
+  check('first call with a fresh key succeeds', !firstReturn.error, JSON.stringify(firstReturn));
+
+  const retryReturn = JSON.parse(await idemBackend.handle(JSON.stringify({kind:'rpc', name:'staff_return_phone',
+    params:{p_shop_id:'harare', p_staff_id:'sM', p_local_date: today(), p_phone_id:'pN', p_reason:'Changed mind', p_fault_parts:null, p_notes:null, p_idempotency_key:returnKey}})));
+  check('retry with the SAME key also reports success, not "not currently marked as sold"', !retryReturn.error, JSON.stringify(retryReturn));
+  check('exactly one return is on record - the retry did not create a second one', idemBackend.db.ledger.filter(l=>l.type==='returned' && l.phone_id==='pN').length===1, JSON.stringify(idemBackend.db.ledger.filter(l=>l.phone_id==='pN')));
+  check('the phone only flipped status once, back to in_stock', idemBackend.db.phones.find(p=>p.id==='pN').status==='in_stock');
+
+  const newReturnAttempt = JSON.parse(await idemBackend.handle(JSON.stringify({kind:'rpc', name:'staff_return_phone',
+    params:{p_shop_id:'harare', p_staff_id:'sM', p_local_date: today(), p_phone_id:'pN', p_reason:'Changed mind', p_fault_parts:null, p_notes:null, p_idempotency_key:'k-44444444-4444-4444-4444-444444444444'}})));
+  check('a genuinely NEW key against the same now-in_stock phone still gets the real refusal - this suppresses a repeated key, not returns in general', newReturnAttempt.error && /not currently marked as sold/i.test(newReturnAttempt.error.message), JSON.stringify(newReturnAttempt));
+
+  console.log('\n== O. Client-side idempotency key lifecycle: EOD and receive-stock, driven through the real UI (part 6e wiring) ==');
+  // Section M/N above proved the SERVER dedupes a repeated key. This proves
+  // the CLIENT actually gives every genuinely new submission a genuinely new
+  // key - specifically that a second, real submission in the same visit
+  // (no page reload) is not accidentally sent under the FIRST submission's
+  // key, which would make the server treat it as a replay and silently
+  // discard the corrected/second data while still reporting "success".
+  const keyBackend = createBackend();
+  keyBackend.seed({ staff: [{id:'sO', shop_id:'harare', name:'Farai', pin:'7788', active:true}] });
+  let kp = await newCtx(browser, keyBackend);
+  await kp.goto(FILE); await kp.waitForTimeout(400);
+  await tap(kp, 'Staff entry'); await tap(kp, 'Harare CBD'); await tap(kp, 'Farai');
+  await kp.fill('#pinInput', '7788'); await tap(kp, 'Continue');
+  await tap(kp, "Open today's business day");
+
+  await tap(kp, 'End of day: count & cash');
+  await kp.fill('#eodCount', '10'); await kp.fill('#eodFaulty', '0'); await kp.fill('#eodCash', '150');
+  await tap(kp, 'Submit end of day');
+  t = await kp.locator('#app').innerText();
+  check('first EOD submitted', /submitted/i.test(t), t.slice(0,150));
+  await tap(kp, 'Continue');
+  await tap(kp, 'End of day: count & cash');
+  await kp.fill('#eodCount', '10'); await kp.fill('#eodFaulty', '0'); await kp.fill('#eodCash', '999');
+  await tap(kp, 'Submit end of day');
+  t = await kp.locator('#app').innerText();
+  check('corrected EOD submitted in the same visit, no reload', /submitted/i.test(t), t.slice(0,150));
+
+  const eodCalls = keyBackend.calls.filter(c=>c.name==='staff_submit_eod');
+  check('two staff_submit_eod calls actually went out', eodCalls.length===2, JSON.stringify(eodCalls.map(c=>c.params.p_idempotency_key)));
+  check('the second EOD submission used a DIFFERENT idempotency key than the first - eodIdemKey cleared on success, not just on navigating away',
+    eodCalls.length===2 && !!eodCalls[0].params.p_idempotency_key && !!eodCalls[1].params.p_idempotency_key && eodCalls[0].params.p_idempotency_key !== eodCalls[1].params.p_idempotency_key,
+    JSON.stringify(eodCalls.map(c=>c.params.p_idempotency_key)));
+  const eodLog = keyBackend.db.daily_logs.find(l=>l.shop_id==='harare');
+  check('the CORRECTED cash figure (999) actually landed - not a replayed "success" of the first call (150)', eodLog && eodLog.cash===999, JSON.stringify(eodLog));
+  check('resubmitted history shows two real, distinct writes happened (not one write plus a silent replay)',
+    eodLog && eodLog.resubmitted===1 && eodLog.previous_counts.length===1 && eodLog.previous_counts[0].cash===150, JSON.stringify(eodLog));
+
+  await tap(kp, 'Continue');
+  await tap(kp, 'Received new stock');
+  await tap(kp, 'Galaxy A55'); await kp.fill('#recvQty', '1');
+  await tap(kp, 'Next: enter IMEIs');
+  await kp.locator('.imeiRow').first().fill('600000000000001');
+  await tap(kp, 'Add this item to the document');
+  await tap(kp, 'Finish: save document to stock');
+  t = await kp.locator('#app').innerText();
+  check('first receiving batch saved (1 phone)', /1 phone\(s\) added to stock/.test(t), t.slice(0,150));
+
+  await tap(kp, 'Receive more stock');
+  await tap(kp, 'Not listed - type it in');
+  await kp.fill('#recvModel', 'Pixel 9');
+  await kp.fill('#recvQty', '2');
+  await tap(kp, 'Next: enter IMEIs');
+  const recvRows = kp.locator('.imeiRow');
+  await recvRows.nth(0).fill('600000000000002');
+  await recvRows.nth(1).fill('600000000000003');
+  await tap(kp, 'Add this item to the document');
+  await tap(kp, 'Finish: save document to stock');
+  t = await kp.locator('#app').innerText();
+  check('second, different receiving batch (2 phones) saved in the same visit, no reload', /2 phone\(s\) added to stock/.test(t), t.slice(0,150));
+
+  const recvCalls = keyBackend.calls.filter(c=>c.name==='staff_receive_stock');
+  check('two staff_receive_stock calls actually went out', recvCalls.length===2, JSON.stringify(recvCalls.map(c=>c.params.p_idempotency_key)));
+  check('the second batch used a DIFFERENT idempotency key than the first - receiveIdemKey cleared on success, not just on navigating away',
+    recvCalls.length===2 && !!recvCalls[0].params.p_idempotency_key && !!recvCalls[1].params.p_idempotency_key && recvCalls[0].params.p_idempotency_key !== recvCalls[1].params.p_idempotency_key,
+    JSON.stringify(recvCalls.map(c=>c.params.p_idempotency_key)));
+  check('the second call got back its OWN real count (2) - not the first call\'s stale replayed count (1)', recvCalls[1] && recvCalls[1].result.data===2, JSON.stringify(recvCalls[1] && recvCalls[1].result));
+  check('all 3 phones (1 from batch one, 2 from batch two) actually got inserted - batch two was not silently replayed as batch one',
+    ['600000000000001','600000000000002','600000000000003'].every(imei=>keyBackend.db.phones.some(p=>p.imei===imei)),
+    JSON.stringify(keyBackend.db.phones.map(p=>p.imei)));
 
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL SUPABASE-REWRITE CHECKS PASSED' : failures + ' FAILED'));

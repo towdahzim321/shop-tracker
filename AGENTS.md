@@ -44,6 +44,29 @@
 - Staff-facing views must stay additive and must never expose 
   `cost_price`, `pin_hash`, or other admin-only columns.
 
+## Applying migrations
+- Migrations are applied with psql using $DATABASE_URL from .env, never 
+  through the Supabase dashboard.
+- Always run the file's verification query afterwards and report the 
+  actual output, not a summary.
+
+## Live testing: staging only, never production
+- `DATABASE_URL` is production. `DATABASE_URL_STAGING` (also in `.env`) is a
+  separate Supabase project holding a schema-only copy of production (no
+  real staff, no real pin hashes, no real stock/ledger/daily_logs history)
+  seeded only with the three real shop rows (harare/bulawayo1/bulawayo2,
+  id+name+active+sort_order - not sensitive) and one fake staff member.
+- Any test that drives the actual app against a real Supabase backend -
+  button-lock behavior, network-throttling/rapid-tap tests, "does this
+  actually land one row not five," multi-step same-visit flows, anything
+  beyond the in-memory mock in supabase-test.js - runs against
+  DATABASE_URL_STAGING and a build of index.html pointed at the staging
+  project's URL/anon key, never against production.
+- When staging's schema drifts from production (a new migration applied to
+  one but not the other), re-sync it with a fresh `pg_dump --schema-only`
+  from production before trusting staging test results again - don't test
+  against a staging schema you haven't confirmed matches.
+
 ## Settled scope decisions (do not re-litigate)
 - Do not auto-seed shop or reference rows — wait for explicit pasted 
   values before finalizing any row-level seed data.

@@ -88,6 +88,7 @@
   .btn-outline{background:#fff;color:var(--navy);border:1.5px solid var(--border);}
   .btn-full-center{text-align:center;}
   .btn:active{transform:scale(0.98);}
+  .btn:disabled{opacity:.6;cursor:default;}
   .btn-sub{display:block;font-size:12px;font-weight:400;opacity:0.75;margin-top:3px;}
   .field{margin-bottom:18px;}
   .field label{display:block;font-size:13px;font-weight:600;color:var(--text-soft);margin-bottom:7px;}
@@ -437,7 +438,34 @@ function nowLabel(){ return new Date().toLocaleString('en-GB',{day:'2-digit',mon
 function money(n){ if(n===null||n===undefined||isNaN(n)) return '-'; return '$' + Number(n).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2}); }
 function genId(){ return 'p' + Date.now() + Math.random().toString(36).slice(2,7); }
 function genBatchId(){ return 'b' + Date.now() + Math.random().toString(36).slice(2,7); }
+function genUuid(){
+  if(typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c=>{
+    const r = Math.random()*16|0, v = c==='x'?r:(r&0x3|0x8);
+    return v.toString(16);
+  });
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// Locks a submit button the instant a real save attempt starts, so a second
+// tap while the first is still in flight can't fire a second request. Only
+// the code path that gets a definite reply (success or a real error) calls
+// unlockBtn - a hung request with no reply at all just leaves the button
+// locked, which is deliberate, not a bug to fix later.
+function lockBtnSaving(id){
+  const btn = document.getElementById(id);
+  if(!btn) return null;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  return original;
+}
+function unlockBtn(id, originalLabel){
+  const btn = document.getElementById(id);
+  if(!btn) return;
+  btn.disabled = false;
+  if(originalLabel!=null) btn.textContent = originalLabel;
+}
 
 // The app must never show a blank screen just because the shared database
 // can't be reached. If Supabase is unreachable it shows the last saved copy
@@ -1168,18 +1196,20 @@ function screenStaffMenu(){
   let statusBanner = '';
   let actionButtons = '';
   if(!dayOpen){
+    if(!openDayIdemKey) openDayIdemKey = genUuid();
     statusBanner = bizDay && bizDay.status==='closed'
       ? `<div class="warn-banner">Today's business day (${esc(today)}) is closed.</div>`
       : `<div class="warn-banner">Today's business day (${esc(today)}) is not open yet.</div>`;
-    actionButtons = `<button class="btn btn-primary btn-full-center" onclick="openBizDayStaffAction()">Open today's business day</button>`;
+    actionButtons = `<button class="btn btn-primary btn-full-center" id="openDayBtn" onclick="openBizDayStaffAction()">Open today's business day</button>`;
   } else {
     statusBanner = `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">Today's business day (${esc(today)}) is open.</div>`;
+    if(eodDone && !closeDayIdemKey) closeDayIdemKey = genUuid();
     actionButtons = `
     <button class="btn btn-primary" onclick="navTo('sale')">Sold a phone</button>
     <button class="btn btn-primary" onclick="navTo('return')">Client return</button>
     <button class="btn btn-primary" onclick="navTo('receive')">Received new stock</button>
     <button class="btn btn-amber" onclick="navTo('eod')">End of day: count &amp; cash</button>
-    ${eodDone ? `<button class="btn btn-outline" style="border-color:var(--red);color:var(--red);" onclick="closeBizDayAction()">Close business day</button>` : `<div style="font-size:12px;color:var(--text-faint);text-align:center;margin-bottom:12px;">Submit end of day before you can close the business day.</div>`}
+    ${eodDone ? `<button class="btn btn-outline" id="closeDayBtn" style="border-color:var(--red);color:var(--red);" onclick="closeBizDayAction()">Close business day</button>` : `<div style="font-size:12px;color:var(--text-faint);text-align:center;margin-bottom:12px;">Submit end of day before you can close the business day.</div>`}
     `;
   }
   const inStockCount = data.inventory.filter(p=>p.status==='in_stock').length;
@@ -1205,14 +1235,26 @@ async function closeBizDayAction(){
   const ok = await askConfirm("Close today's business day? You will not be able to add more entries for today unless the day is opened again.", 'Yes, close the day', false);
   if(!ok) return;
   const date = todayStr();
-  const res = await callRpc('staff_close_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date});
-  if(res.ok) await refreshShopData(S.shopId);
+  const label = lockBtnSaving('closeDayBtn');
+  const res = await callRpc('staff_close_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: closeDayIdemKey});
+  if(res.ok){
+    closeDayIdemKey = null;
+    await refreshShopData(S.shopId);
+  } else {
+    unlockBtn('closeDayBtn', label);
+  }
   render();
 }
 async function openBizDayStaffAction(){
   const date = todayStr();
-  const res = await callRpc('staff_open_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date});
-  if(res.ok) await refreshShopData(S.shopId);
+  const label = lockBtnSaving('openDayBtn');
+  const res = await callRpc('staff_open_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: openDayIdemKey});
+  if(res.ok){
+    openDayIdemKey = null;
+    await refreshShopData(S.shopId);
+  } else {
+    unlockBtn('openDayBtn', label);
+  }
   render();
 }
 function screenStaffDash(){
@@ -1287,6 +1329,10 @@ function screenStaffDash(){
 }
 
 let selectedPhone = null;
+let saleIdemKey = null;
+let returnIdemKey = null;
+let openDayIdemKey = null;
+let closeDayIdemKey = null;
 function dayNotOpenScreen(){
   return `
   ${topbar(shopName(S.shopId), 'Business day not open', true)}
@@ -1341,6 +1387,7 @@ function attachSearchFilter(inputId, listId){
 function pickSalePhone(phoneId){
   const data = SHOP_CACHE[S.shopId];
   selectedPhone = data.inventory.find(p=>p.id===phoneId);
+  saleIdemKey = genUuid();
   navTo('salePrice');
 }
 function screenSalePrice(){
@@ -1358,7 +1405,7 @@ function screenSalePrice(){
       <input type="tel" inputmode="decimal" id="priceInput" placeholder="e.g. 180" value="${selectedPhone.listPrice||''}">
     </div>
     <div id="priceErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="confirmSale()">Confirm sale</button>
+    <button class="btn btn-primary btn-full-center" id="saleConfirmBtn" onclick="confirmSale()">Confirm sale</button>
   </div>`;
 }
 async function confirmSale(){
@@ -1366,13 +1413,16 @@ async function confirmSale(){
   const num = parseFloat(val);
   if(!val || isNaN(num) || num<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter a valid sale price.</div>'; return; }
   const phoneId = selectedPhone.id;
-  const res = await callRpc('staff_sell_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_price: num});
+  const label = lockBtnSaving('saleConfirmBtn');
+  const res = await callRpc('staff_sell_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_price: num, p_idempotency_key: saleIdemKey});
   if(!res.ok){
+    unlockBtn('saleConfirmBtn', label);
     document.getElementById('priceErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
     return;
   }
   await refreshShopData(S.shopId);
   selectedPhone = null;
+  saleIdemKey = null;
   showSuccessThen('Sale recorded.', 'staffMenu');
 }
 
@@ -1396,6 +1446,7 @@ function screenReturn(){
 function pickReturnPhone(phoneId){
   const data = SHOP_CACHE[S.shopId];
   selectedPhone = data.inventory.find(p=>p.id===phoneId);
+  returnIdemKey = genUuid();
   S.returnReason = null;
   S.returnFaultParts = null;
   S.returnNotes = null;
@@ -1425,7 +1476,7 @@ function screenReturnReason(){
       </div>
     ` : ''}
     <div id="returnErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="confirmReturn()">Confirm return</button>
+    <button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm return</button>
   </div>`;
 }
 function syncReturnNotes(){ const el = document.getElementById('returnNotesInput'); if(el) S.returnNotes = el.value; }
@@ -1451,13 +1502,16 @@ async function confirmReturn(){
   const parts = reason==='Faulty' ? (S.returnFaultParts||[]) : null;
   const notes = S.returnNotes || null;
   const isFaulty = reason === 'Faulty';
-  const res = await callRpc('staff_return_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes});
+  const label = lockBtnSaving('returnConfirmBtn');
+  const res = await callRpc('staff_return_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes, p_idempotency_key: returnIdemKey});
   if(!res.ok){
+    unlockBtn('returnConfirmBtn', label);
     document.getElementById('returnErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
     return;
   }
   await refreshShopData(S.shopId);
   selectedPhone = null;
+  returnIdemKey = null;
   S.returnFaultParts = null;
   S.returnNotes = null;
   showSuccessThen(isFaulty ? 'Return recorded. Put this phone on the faulty shelf - do not sell it.' : 'Return recorded. Phone is back in stock.', 'staffMenu');
@@ -1465,7 +1519,7 @@ async function confirmReturn(){
 
 function screenReceive(){
   if(!requireOpenDay()) return dayNotOpenScreen();
-  if(!S.receiveBatch) S.receiveBatch = {lines:[]};
+  if(!S.receiveBatch){ S.receiveBatch = {lines:[]}; S.receiveIdemKey = genUuid(); }
   const step = S.receiveStep || 'lineDetails';
   if(step === 'lineImeis') return screenReceiveLineImeis();
   if(step === 'batchSummary') return screenReceiveBatchSummary();
@@ -1684,16 +1738,18 @@ function screenReceiveBatchSummary(){
     </div>
     <div style="font-size:13px;color:var(--text-soft);margin-bottom:16px;">Total: ${totalPcs} phone(s) across ${lines.length} item(s)</div>
     <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='lineDetails';render();">Add another colour or model</button>
-    <button class="btn btn-amber btn-full-center" onclick="finishReceiving()">Finish: save document to stock</button>
+    <button class="btn btn-amber btn-full-center" id="receiveFinishBtn" onclick="finishReceiving()">Finish: save document to stock</button>
   </div>`;
 }
 async function finishReceiving(){
   const lines = S.receiveBatch.lines || [];
   if(lines.length===0) return;
   const items = lines.map(l => ({ model: l.model, description: l.description || '', imeis: l.imeis }));
-  const res = await callRpc('staff_receive_stock', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_items: items});
+  const label = lockBtnSaving('receiveFinishBtn');
+  const res = await callRpc('staff_receive_stock', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_items: items, p_idempotency_key: S.receiveIdemKey});
   const app = document.getElementById('app');
   if(!res.ok){
+    unlockBtn('receiveFinishBtn', label);
     app.innerHTML = offlineBanner() + saveErrorBanner() + `
       ${topbar(shopName(S.shopId), '', true)}
       <div class="content">
@@ -1707,6 +1763,7 @@ async function finishReceiving(){
   await refreshShopData(S.shopId);
   await loadShopsAndModels(); // picks up any model staff just typed as new
   S.receiveBatch = {lines:[]};
+  S.receiveIdemKey = null;
   S.receiveLineDraft = null;
   S.receiveStep = 'lineDetails';
   app.innerHTML = offlineBanner() + saveErrorBanner() + `
@@ -1720,6 +1777,7 @@ async function finishReceiving(){
 
 function screenEod(){
   if(!requireOpenDay()) return dayNotOpenScreen();
+  if(!S.eodIdemKey) S.eodIdemKey = genUuid();
   const data = SHOP_CACHE[S.shopId] || emptyShopData();
   const today = todayStr();
   const existing = data.dailyLogs.find(l=>l.date===today);
@@ -1740,7 +1798,7 @@ function screenEod(){
       <input type="tel" inputmode="decimal" id="eodCash" value="${existing?existing.cash:''}" placeholder="e.g. 950">
     </div>
     <div id="eodErr"></div>
-    <button class="btn btn-amber btn-full-center" onclick="confirmEod()">Submit end of day</button>
+    <button class="btn btn-amber btn-full-center" id="eodSubmitBtn" onclick="confirmEod()">Submit end of day</button>
   </div>`;
 }
 async function confirmEod(){
@@ -1752,11 +1810,14 @@ async function confirmEod(){
   if(isNaN(faulty) || faulty<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter how many faulty phones you counted (put 0 if none).</div>'; return; }
   if(isNaN(cash) || cash<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter the cash collected today.</div>'; return; }
   const today = todayStr();
-  const res = await callRpc('staff_submit_eod', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: today, p_physical_count: count, p_faulty_count: faulty, p_cash: cash});
+  const label = lockBtnSaving('eodSubmitBtn');
+  const res = await callRpc('staff_submit_eod', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: today, p_physical_count: count, p_faulty_count: faulty, p_cash: cash, p_idempotency_key: S.eodIdemKey});
   if(!res.ok){
+    unlockBtn('eodSubmitBtn', label);
     document.getElementById('eodErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
     return;
   }
+  S.eodIdemKey = null;
   await refreshShopData(S.shopId);
   showSuccessThen('End of day submitted. Thank you!', 'staffMenu');
 }
