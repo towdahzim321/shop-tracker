@@ -2,3 +2,6 @@
 *.dump.sql
 backups/
 node_modules/
+.env
+index.staging.html
+staging-*.js

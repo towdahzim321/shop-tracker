@@ -1,0 +1,50 @@
+-- ============================================================================
+-- TOWDAH ELECTRONICS SHOP TRACKER — Schema Part 6b: drop the stale staff_sell_phone overload
+-- Phase 4a (plumbing) — hotfix
+-- ============================================================================
+-- URGENT. Run this immediately - sales are currently broken on the live app.
+--
+-- THE TRAP
+-- `create or replace function` only replaces a function whose NAME AND FULL
+-- PARAMETER TYPE LIST match exactly. Part 6a added a 6th parameter
+-- (p_idempotency_key) to staff_sell_phone. Postgres saw a different type
+-- signature, not a replacement of the 5-parameter version - so it created a
+-- SECOND, separate function with the same name (an overload) and left the
+-- original one in place untouched. Confirmed via pg_proc: both
+--   staff_sell_phone(text,uuid,date,uuid,numeric)        -- old, still live
+--   staff_sell_phone(text,uuid,date,uuid,numeric,uuid)    -- new, from part 6a
+-- exist simultaneously. PostgREST cannot pick between two overloads of the
+-- same name from one RPC call and fails the request entirely, which is why
+-- every sale attempt showed "could not reach the shared database" - not a
+-- connectivity problem, a resolution failure on every single call.
+--
+-- The new 6-parameter function is not the problem - it's tested (mock +
+-- retry-with-same-key test in supabase-test.js) and its body is the
+-- unmodified original staff_sell_phone plus only the idempotency wrapping.
+-- The fix is removing the stale 5-parameter version that shouldn't still
+-- exist, not touching the new one.
+--
+-- WHAT THIS DOES
+-- 1) Drops ONLY the old 5-parameter overload, by its exact, full argument
+--    list, so this statement cannot possibly match the new 6-parameter one
+--    even if Postgres's overload resolution were somehow ambiguous (it
+--    isn't, once the argument count differs, but the full list is written
+--    out here rather than relying on that).
+-- 2) Tells PostgREST to reload its schema cache. PostgREST caches the
+--    function list at startup and after each previous reload - it will keep
+--    trying to resolve between two overloads (or serving a stale view of the
+--    catalog generally) until explicitly told the catalog changed, even
+--    after the DROP above has already run and committed. This is near-
+--    instant but not perfectly synchronous with the DROP - PostgREST picks
+--    the NOTIFY up on its own listener, typically within a second or so.
+--
+-- VERIFY AFTER RUNNING (should show exactly one row)
+--   select p.proname, pg_get_function_identity_arguments(p.oid) as signature
+--   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--   where n.nspname = 'public' and p.proname = 'staff_sell_phone';
+-- Then confirm a real sale in the app succeeds.
+-- ============================================================================
+
+drop function if exists public.staff_sell_phone(text, uuid, date, uuid, numeric);
+
+notify pgrst, 'reload schema';
