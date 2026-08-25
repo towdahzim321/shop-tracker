@@ -312,6 +312,72 @@ async function waitUntil(page, fn, timeoutMs = 5000, intervalMs = 50) {
     await page.close();
   }
 
+  // ===========================================================================
+  console.log('\n== 7. Resolving a queued EOD refreshes SHOP_CACHE immediately - no poll tick needed ==');
+  {
+    const page = await newEngineOnlyPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'eod', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [] };
+      window.__refreshCalls = [];
+      window.__realRefreshShopData = window.refreshShopData;
+      // Stands in for a real Supabase read: records the call and writes the
+      // "server's" current daily_logs into SHOP_CACHE, same contract as the
+      // real refreshShopData - so this test can tell whether attemptSendHead
+      // actually invoked it, without needing a real network round trip.
+      window.refreshShopData = function(shopId){
+        window.__refreshCalls.push(shopId);
+        SHOP_CACHE[shopId].dailyLogs = [{ date: todayStr(), physicalCount: 5, faultyCount: 0, cash: 150 }];
+        return Promise.resolve(SHOP_CACHE[shopId]);
+      };
+    });
+
+    await setMockResults(page, [{ ok: false, error: 'no reply', noReply: true }]);
+    await page.evaluate(() => enqueueOutbox({
+      rpcName: 'staff_submit_eod',
+      params: { p_shop_id: 'harare', p_staff_id: 's1', p_local_date: todayStr(), p_physical_count: 5, p_faulty_count: 0, p_cash: 150, p_idempotency_key: 'key-eod-cache' },
+      localDate: todayStr(),
+      label: 'End of day - ' + todayStr() + ' (Harare CBD)'
+    }));
+
+    check('SHOP_CACHE has no daily log yet - stale, pre-resolution state', (await page.evaluate(() => SHOP_CACHE['harare'].dailyLogs.length)) === 0);
+    check('refreshShopData not called yet - nothing has resolved', (await page.evaluate(() => window.__refreshCalls.length)) === 0);
+
+    // Now let the real reply land.
+    await setMockResults(page, [{ ok: true, data: null, noReply: false }]);
+    await page.evaluate(() => sendQueueNow());
+    await waitUntil(page, () => window.__refreshCalls && window.__refreshCalls.length >= 1);
+
+    check('refreshShopData was called for harare, immediately on resolution', (await page.evaluate(() => window.__refreshCalls)).includes('harare'), JSON.stringify(await page.evaluate(() => window.__refreshCalls)));
+    const dailyLogs = await page.evaluate(() => SHOP_CACHE['harare'].dailyLogs);
+    check('SHOP_CACHE reflects the new daily_logs entry right away - no separate poll tick needed', dailyLogs.length === 1 && dailyLogs[0].cash === 150, JSON.stringify(dailyLogs));
+    await page.close();
+  }
+
+  // ===========================================================================
+  console.log('\n== 8. refreshShopData is scoped to the shop currently on screen, not called blindly ==');
+  {
+    const page = await newEngineOnlyPage(browser);
+    await page.evaluate(() => {
+      // Staff is looking at bulawayo1's screen while a stale harare entry
+      // (queued earlier, before they switched shops) finally resolves.
+      S = { view: 'staffMenu', shopId: 'bulawayo1', staffId: 's2', staffName: 'Test2' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [] };
+      window.__refreshCalls = [];
+      window.refreshShopData = function(shopId){ window.__refreshCalls.push(shopId); return Promise.resolve(SHOP_CACHE[shopId]); };
+    });
+    await setMockResults(page, [{ ok: true, data: null, noReply: false }]);
+    await page.evaluate(() => enqueueOutbox({
+      rpcName: 'staff_open_day', params: { p_shop_id: 'harare', p_idempotency_key: 'key-other-shop' },
+      localDate: todayStr(), label: 'Open day (Harare CBD)'
+    }));
+    await page.evaluate(() => sendQueueNow());
+    await waitUntil(page, () => getOutboxQueue().length === 0);
+    await page.waitForTimeout(150);
+    check('refreshShopData NOT called - resolved entry\'s shop (harare) is not the one currently on screen (bulawayo1)', (await page.evaluate(() => window.__refreshCalls.length)) === 0, JSON.stringify(await page.evaluate(() => window.__refreshCalls)));
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX ENGINE CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);

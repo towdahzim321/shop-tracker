@@ -730,6 +730,21 @@ async function attemptSendHead(){
     if(head.attemptMs >= OUTBOX_STALLED_THRESHOLD_MS) head.stalled = true;
   }
 
+  // A real reply just arrived (success or a real error - either way,
+  // !res.noReply) for whichever shop is currently on screen. Without this,
+  // the per-screen queued notice clears and the original button reappears,
+  // but SHOP_CACHE still shows pre-attempt data until the next 15s poll -
+  // long enough for staff to navigate back to, say, the EOD screen, see no
+  // existing log, and genuinely resubmit under a fresh key. That would
+  // create a real duplicate resubmitted/previous_counts entry via a stale
+  // cache instead of a stale network retry - the same failure this whole
+  // phase exists to prevent, just reached a different way. Scoped to the
+  // shop currently on screen, not the entry's shop unconditionally - no
+  // point refreshing data nobody is looking at right now.
+  if(!res.noReply && head.params && head.params.p_shop_id === S.shopId){
+    await refreshShopData(S.shopId);
+  }
+
   saveOutbox();
   outboxSending = false;
   scheduleNextOutboxAttempt();
