@@ -821,14 +821,30 @@ function render(){
   }
   setTimeout(updateTableFades, 0);
 }
-// Shows the .table-scroll right-edge fade only on frames that actually have
-// more to scroll to - a table that already fits gets no fade, so it never
-// implies there's more when there isn't.
-function updateTableFades(){
-  document.querySelectorAll('.table-scroll').forEach(el=>{
-    el.classList.toggle('has-overflow', el.scrollWidth > el.clientWidth + 1);
-  });
+// Shows the .table-scroll right-edge fade only while there is genuinely
+// more content to the right RIGHT NOW - not just whether the table is wider
+// than its frame in general. Checking scrollWidth > clientWidth alone (the
+// old check) stays true for the table's entire lifetime once it overflows,
+// so the fade never turned off even after scrolling all the way right -
+// it sat there permanently, washing over whatever column happened to land
+// at the edge. Comparing against scrollLeft is what makes it disappear once
+// there's nothing left to reveal.
+function tableScrollHasMoreRight(el){
+  return el.scrollWidth > el.clientWidth + 1 && (el.scrollLeft + el.clientWidth) < (el.scrollWidth - 1);
 }
+function updateTableFadeFor(el){
+  el.classList.toggle('has-overflow', tableScrollHasMoreRight(el));
+}
+function updateTableFades(){
+  document.querySelectorAll('.table-scroll').forEach(updateTableFadeFor);
+}
+// scroll events on an element don't bubble, but they DO still fire on
+// ancestors during the CAPTURING phase - so one delegated listener here
+// covers every .table-scroll frame that exists now or gets rendered later,
+// with no per-render listener setup/teardown needed.
+document.addEventListener('scroll', function(e){
+  if(e.target && e.target.classList && e.target.classList.contains('table-scroll')) updateTableFadeFor(e.target);
+}, true);
 function showFatal(err, headline){
   const app = document.getElementById('app');
   const msg = (err && err.message) ? err.message : String(err || 'Unknown problem');
