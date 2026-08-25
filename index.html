@@ -252,6 +252,25 @@
     background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:8px;
     padding:5px 10px;font-size:12px;font-weight:600;font-family:inherit;flex:0 0 auto;cursor:pointer;
   }
+  .outbox-bar{background:var(--amber-bg);color:#7A4E0A;font-size:12.5px;font-weight:600;line-height:1.45;}
+  .outbox-bar-head{padding:11px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;}
+  .outbox-bar-list{padding:0 14px 4px;}
+  .outbox-bar-item{padding:8px 0;border-top:1px solid rgba(122,78,10,0.15);}
+  .outbox-bar-time{font-weight:400;opacity:0.8;margin-top:2px;}
+  .outbox-bar .btn{margin:0 14px 12px;width:calc(100% - 28px);}
+  .outbox-attention{background:var(--red);color:#fff;font-size:12.5px;font-weight:600;line-height:1.45;padding:11px 14px;}
+  .outbox-attention-head{margin-bottom:8px;}
+  .outbox-attention-item{background:rgba(255,255,255,0.14);border-radius:8px;padding:10px;margin-bottom:8px;}
+  .outbox-attention-item:last-child{margin-bottom:0;}
+  .outbox-attention-item .txt{font-weight:400;margin-bottom:8px;}
+  .outbox-attention-actions{display:flex;gap:8px;}
+  .outbox-attention-actions button{
+    background:rgba(255,255,255,0.22);border:none;color:#fff;border-radius:8px;
+    padding:6px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;
+  }
+  .queued-notice{background:var(--amber-bg);border:1.5px solid #E8C27A;border-radius:10px;padding:12px 14px;text-align:center;margin-bottom:12px;}
+  .queued-notice .lbl{font-weight:700;color:#7A4E0A;font-size:13px;}
+  .queued-notice .sub{font-size:12px;color:#7A4E0A;opacity:0.85;margin-top:3px;}
   .fatal-box{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:22px 18px;margin:20px;}
   .fatal-box h1{font-size:19px;margin-bottom:10px;}
   .fatal-box p{font-size:14px;color:var(--text-soft);line-height:1.55;margin:0 0 14px;}
@@ -714,6 +733,7 @@ async function attemptSendHead(){
   saveOutbox();
   outboxSending = false;
   scheduleNextOutboxAttempt();
+  refreshOutboxUI();
 }
 
 // Like every other trigger, sendQueueNow() only ever attempts the current
@@ -734,6 +754,87 @@ window.addEventListener('online', function(){ attemptSendHead(); });
 function getOutboxQueue(){ return OUTBOX.queue.slice(); }
 function getOutboxNeedsAttention(){ return OUTBOX.needsAttention.slice(); }
 function getOutboxCounts(){ return { queued: OUTBOX.queue.length, needsAttention: OUTBOX.needsAttention.length }; }
+
+// ---- Outbox UI: the "N waiting" bar, the needs-attention banner, and the
+// per-screen "already queued" check the six action screens use. ----------
+function outboxAgo(ts){
+  const mins = Math.max(0, Math.round((Date.now()-ts)/60000));
+  if(mins < 1) return 'just now';
+  if(mins < 60) return mins + (mins===1?' min ago':' mins ago');
+  const hrs = Math.round(mins/60);
+  return hrs + (hrs===1?' hour ago':' hours ago');
+}
+// What each of the six screens calls to find whether the action it's about
+// to offer is already sitting in the queue - so it can show a locked
+// "queued" state instead of a normal button. matchParams runs against the
+// queued entry's own params object (the exact one that was sent).
+function findQueuedOutboxEntry(rpcName, matchParams){
+  return OUTBOX.queue.find(e => e.rpcName === rpcName && matchParams(e.params));
+}
+function queuedActionNotice(entry){
+  return `<div class="queued-notice">
+    <div class="lbl">Queued — sending automatically</div>
+    <div class="sub">${esc(entry.label)} · waiting ${esc(outboxAgo(entry.queuedAt))}${entry.stalled ? ' · hasn\'t gone through yet, tap "Send now" below' : ''}</div>
+  </div>`;
+}
+
+let OUTBOX_BAR_EXPANDED = false;
+function toggleOutboxBar(){ OUTBOX_BAR_EXPANDED = !OUTBOX_BAR_EXPANDED; render(); }
+function outboxSendNowClicked(){ sendQueueNow(); render(); }
+function outboxWaitingBar(){
+  const queue = getOutboxQueue();
+  if(queue.length === 0) return '';
+  return `<div class="outbox-bar">
+    <div class="outbox-bar-head" onclick="toggleOutboxBar()">
+      <span>${queue.length} ${queue.length===1?'entry':'entries'} waiting to send</span>
+      <span>${OUTBOX_BAR_EXPANDED ? '&#9650;' : '&#9660;'}</span>
+    </div>
+    ${OUTBOX_BAR_EXPANDED ? `
+      <div class="outbox-bar-list">
+        ${queue.map(e => `<div class="outbox-bar-item">
+          <div>${esc(e.label)}</div>
+          <div class="outbox-bar-time">waiting ${esc(outboxAgo(e.queuedAt))}${e.stalled ? ' · not retrying automatically right now' : ''}</div>
+        </div>`).join('')}
+      </div>
+      <button class="btn btn-outline btn-full-center" onclick="outboxSendNowClicked()">Send now</button>
+    ` : ''}
+  </div>`;
+}
+async function discardOutboxEntry(id){
+  const ok = await askConfirm('Discard this entry permanently? This cannot be undone - it will NOT be saved.', 'Yes, discard it', false);
+  if(!ok) return;
+  discardNeedsAttention(id);
+  render();
+}
+function retryOutboxEntry(id){
+  retryNeedsAttentionEntry(id);
+  render();
+}
+function outboxNeedsAttentionBanner(){
+  const items = getOutboxNeedsAttention();
+  if(items.length === 0) return '';
+  return `<div class="outbox-attention">
+    <div class="outbox-attention-head">${items.length} ${items.length===1?'entry':'entries'} could not be saved - needs your attention</div>
+    ${items.map(e => `<div class="outbox-attention-item">
+      <div class="txt"><strong>${esc(e.label)}</strong><br>${esc(e.error)}</div>
+      <div class="outbox-attention-actions">
+        <button onclick="retryOutboxEntry('${e.id}')">Retry</button>
+        <button onclick="discardOutboxEntry('${e.id}')">Discard</button>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+// Called whenever the outbox's own state changes in the background (an
+// attempt resolved, a stalled flag flipped) so the bar/banner/per-screen
+// notices actually reflect it. Skips re-rendering while the user has an
+// input/textarea/select focused, mirroring pollTick()'s own guard - a
+// background render() would otherwise wipe out whatever they're mid-typing,
+// since screen markup is rebuilt from scratch on every render().
+function refreshOutboxUI(){
+  const ae = document.activeElement;
+  if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName) >= 0) return;
+  if(document.getElementById('app')) render();
+}
 
 // What B2's needs-attention UI buttons will call. Permanent discard, or
 // send it around again - re-enqueued at the BACK of the queue (never
@@ -1004,7 +1105,7 @@ function render(){
   // site that forgets to clear it.
   if(S.staffId && ADMIN_SESSION) clearAdminSession();
   try{
-    app.innerHTML = offlineBanner() + saveErrorBanner() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
+    app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -1405,16 +1506,21 @@ function screenStaffMenu(){
     statusBanner = bizDay && bizDay.status==='closed'
       ? `<div class="warn-banner">Today's business day (${esc(today)}) is closed.</div>`
       : `<div class="warn-banner">Today's business day (${esc(today)}) is not open yet.</div>`;
-    actionButtons = `<button class="btn btn-primary btn-full-center" id="openDayBtn" onclick="openBizDayStaffAction()">Open today's business day</button>`;
+    const queuedOpen = findQueuedOutboxEntry('staff_open_day', p => p.p_shop_id === S.shopId && p.p_local_date === today);
+    actionButtons = queuedOpen ? queuedActionNotice(queuedOpen)
+      : `<button class="btn btn-primary btn-full-center" id="openDayBtn" onclick="openBizDayStaffAction()">Open today's business day</button>`;
   } else {
     statusBanner = `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">Today's business day (${esc(today)}) is open.</div>`;
     if(eodDone && !closeDayIdemKey) closeDayIdemKey = genUuid();
+    const queuedClose = eodDone ? findQueuedOutboxEntry('staff_close_day', p => p.p_shop_id === S.shopId && p.p_local_date === today) : null;
     actionButtons = `
     <button class="btn btn-primary" onclick="navTo('sale')">Sold a phone</button>
     <button class="btn btn-primary" onclick="navTo('return')">Client return</button>
     <button class="btn btn-primary" onclick="navTo('receive')">Received new stock</button>
     <button class="btn btn-amber" onclick="navTo('eod')">End of day: count &amp; cash</button>
-    ${eodDone ? `<button class="btn btn-outline" id="closeDayBtn" style="border-color:var(--red);color:var(--red);" onclick="closeBizDayAction()">Close business day</button>` : `<div style="font-size:12px;color:var(--text-faint);text-align:center;margin-bottom:12px;">Submit end of day before you can close the business day.</div>`}
+    ${eodDone
+      ? (queuedClose ? queuedActionNotice(queuedClose) : `<button class="btn btn-outline" id="closeDayBtn" style="border-color:var(--red);color:var(--red);" onclick="closeBizDayAction()">Close business day</button>`)
+      : `<div style="font-size:12px;color:var(--text-faint);text-align:center;margin-bottom:12px;">Submit end of day before you can close the business day.</div>`}
     `;
   }
   const inStockCount = data.inventory.filter(p=>p.status==='in_stock').length;
@@ -1610,6 +1716,7 @@ function pickSalePhone(phoneId){
 }
 function screenSalePrice(){
   if(!selectedPhone) return screenHome();
+  const queued = findQueuedOutboxEntry('staff_sell_phone', p => p.p_phone_id === selectedPhone.id);
   return `
   ${topbar(shopName(S.shopId), 'Confirm sale', true)}
   <div class="content">
@@ -1620,10 +1727,10 @@ function screenSalePrice(){
     </div>
     <div class="field">
       <label>Sale price ($)</label>
-      <input type="tel" inputmode="decimal" id="priceInput" placeholder="e.g. 180" value="${selectedPhone.listPrice||''}">
+      <input type="tel" inputmode="decimal" id="priceInput" placeholder="e.g. 180" value="${selectedPhone.listPrice||''}" ${queued?'disabled':''}>
     </div>
     <div id="priceErr"></div>
-    <button class="btn btn-primary btn-full-center" id="saleConfirmBtn" onclick="confirmSale()">Confirm sale</button>
+    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-primary btn-full-center" id="saleConfirmBtn" onclick="confirmSale()">Confirm sale</button>`}
   </div>`;
 }
 async function confirmSale(){
@@ -1681,6 +1788,7 @@ function pickReturnPhone(phoneId){
 }
 function screenReturnReason(){
   if(!selectedPhone) return screenHome();
+  const queued = findQueuedOutboxEntry('staff_return_phone', p => p.p_phone_id === selectedPhone.id);
   return `
   ${topbar(shopName(S.shopId), 'Reason for return', true)}
   <div class="content">
@@ -1703,7 +1811,7 @@ function screenReturnReason(){
       </div>
     ` : ''}
     <div id="returnErr"></div>
-    <button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm return</button>
+    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm return</button>`}
   </div>`;
 }
 function syncReturnNotes(){ const el = document.getElementById('returnNotesInput'); if(el) S.returnNotes = el.value; }
@@ -1962,6 +2070,7 @@ function confirmLine(){
 function screenReceiveBatchSummary(){
   const lines = S.receiveBatch.lines || [];
   const totalPcs = lines.reduce((a,l)=>a+l.qty,0);
+  const queued = S.receiveQueuedKey ? findQueuedOutboxEntry('staff_receive_stock', p => p.p_idempotency_key === S.receiveQueuedKey) : null;
   return `
   ${topbar('Stock receiving document', shopName(S.shopId), true)}
   <div class="content">
@@ -1972,8 +2081,10 @@ function screenReceiveBatchSummary(){
       `).join('')}
     </div>
     <div style="font-size:13px;color:var(--text-soft);margin-bottom:16px;">Total: ${totalPcs} phone(s) across ${lines.length} item(s)</div>
-    <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='lineDetails';render();">Add another colour or model</button>
-    <button class="btn btn-amber btn-full-center" id="receiveFinishBtn" onclick="finishReceiving()">Finish: save document to stock</button>
+    ${queued ? queuedActionNotice(queued) : `
+      <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='lineDetails';render();">Add another colour or model</button>
+      <button class="btn btn-amber btn-full-center" id="receiveFinishBtn" onclick="finishReceiving()">Finish: save document to stock</button>
+    `}
   </div>`;
 }
 async function finishReceiving(){
@@ -1992,7 +2103,12 @@ async function finishReceiving(){
       enqueueOutbox({ rpcName: 'staff_receive_stock', params, localDate: date, label: `Receive stock - ${totalPhones} phone(s) (${shopName(S.shopId)})` });
       // Fresh key, not null - the document is still intact below (nothing
       // reset), so a later Finish tap on the SAME or an expanded batch must
-      // never collide with what's now queued under the old one.
+      // never collide with what's now queued under the old one. The OLD key
+      // is remembered separately so the batch-summary screen can tell "this
+      // exact batch is already queued" apart from "a different/expanded one
+      // is about to be sent" - matching only on shop+date would incorrectly
+      // block starting a genuinely new, unrelated batch later the same day.
+      S.receiveQueuedKey = S.receiveIdemKey;
       S.receiveIdemKey = genUuid();
       // "Nothing was saved" would be a false claim once this is queued - it
       // may well end up saved. The document itself and the retry flow below
@@ -2000,7 +2116,7 @@ async function finishReceiving(){
       notSavedMsg = 'Could not confirm this document was saved. It will keep trying to save automatically. Nothing else here has been lost — you can also go back and try again yourself.';
     }
     unlockBtn('receiveFinishBtn', label);
-    app.innerHTML = offlineBanner() + saveErrorBanner() + `
+    app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
       ${topbar(shopName(S.shopId), '', true)}
       <div class="content">
         <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
@@ -2014,9 +2130,10 @@ async function finishReceiving(){
   await loadShopsAndModels(); // picks up any model staff just typed as new
   S.receiveBatch = {lines:[]};
   S.receiveIdemKey = null;
+  S.receiveQueuedKey = null;
   S.receiveLineDraft = null;
   S.receiveStep = 'lineDetails';
-  app.innerHTML = offlineBanner() + saveErrorBanner() + `
+  app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
@@ -2031,24 +2148,32 @@ function screenEod(){
   const data = SHOP_CACHE[S.shopId] || emptyShopData();
   const today = todayStr();
   const existing = data.dailyLogs.find(l=>l.date===today);
+  // This is the one action with no natural backstop against a second,
+  // independent submission - staff_submit_eod's whole job is to accept a
+  // real resubmission, so an accidental duplicate (same figures, different
+  // key) would be silently recorded as if it were a genuine correction:
+  // resubmitted increments, previous_counts gets an entry, with no error
+  // anywhere. Matched on shop+date, not a specific key, since there's only
+  // ever one EOD per shop per day.
+  const queued = findQueuedOutboxEntry('staff_submit_eod', p => p.p_shop_id === S.shopId && p.p_local_date === today);
   return `
   ${topbar(shopName(S.shopId), 'End of day', true)}
   <div class="content">
     ${existing ? `<div class="warn-banner">You already submitted today's count and cash. Submitting again will replace it.</div>` : ''}
     <div class="field">
       <label>1. Good phones on the shelf (count them now, one by one)</label>
-      <input type="tel" inputmode="numeric" id="eodCount" value="${existing?existing.physicalCount:''}" placeholder="e.g. 42">
+      <input type="tel" inputmode="numeric" id="eodCount" value="${existing?existing.physicalCount:''}" placeholder="e.g. 42" ${queued?'disabled':''}>
     </div>
     <div class="field">
       <label>2. Faulty phones on the faulty shelf (count separately)</label>
-      <input type="tel" inputmode="numeric" id="eodFaulty" value="${existing && existing.faultyCount!==undefined && existing.faultyCount!==null ? existing.faultyCount : ''}" placeholder="e.g. 2 (put 0 if none)">
+      <input type="tel" inputmode="numeric" id="eodFaulty" value="${existing && existing.faultyCount!==undefined && existing.faultyCount!==null ? existing.faultyCount : ''}" placeholder="e.g. 2 (put 0 if none)" ${queued?'disabled':''}>
     </div>
     <div class="field">
       <label>3. Cash collected today ($)</label>
-      <input type="tel" inputmode="decimal" id="eodCash" value="${existing?existing.cash:''}" placeholder="e.g. 950">
+      <input type="tel" inputmode="decimal" id="eodCash" value="${existing?existing.cash:''}" placeholder="e.g. 950" ${queued?'disabled':''}>
     </div>
     <div id="eodErr"></div>
-    <button class="btn btn-amber btn-full-center" id="eodSubmitBtn" onclick="confirmEod()">Submit end of day</button>
+    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-amber btn-full-center" id="eodSubmitBtn" onclick="confirmEod()">Submit end of day</button>`}
   </div>`;
 }
 async function confirmEod(){
@@ -2093,7 +2218,7 @@ function notSavedBox(what){
 function showSuccessThen(msg, nextView){
   const app = document.getElementById('app');
   const failed = !!SAVE_ERROR;
-  app.innerHTML = offlineBanner() + saveErrorBanner() + `
+  app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
       ${failed ? notSavedBox('That entry') : `<div class="success-box">
@@ -3349,7 +3474,7 @@ async function saveSettings(){
 }
 function showSuccessThenGeneric(msg, nextView){
   const app = document.getElementById('app');
-  app.innerHTML = offlineBanner() + saveErrorBanner() + `
+  app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar('Admin dashboard','',false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${esc(msg)}</div></div>
