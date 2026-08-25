@@ -601,6 +601,167 @@ async function callRpc(name, params){
     return { ok:false, error: SAVE_ERROR, noReply };
   }
 }
+// ---- Outbox: queues a write that got no reply at all, retries it later ---
+// Engine only, built and verified standalone - nothing calls enqueueOutbox()
+// yet (that wiring into the six action handlers is a later step), and there
+// is no UI for any of this yet either. Storage is a dedicated localStorage
+// key, separate from the per-shop twcache_... read cache above.
+//
+// An entry's `params` is never touched after it's enqueued - not cloned,
+// not merged, not regenerated. Whatever idempotency key was already live
+// when the original attempt was made is baked into params before it ever
+// reaches enqueueOutbox(), and every retry resends that exact object.
+const OUTBOX_KEY = 'twoutbox_v1';
+const OUTBOX_BACKOFF_SCHEDULE = [5000, 15000, 30000, 60000]; // then steady 60000
+// "Stalled" after more than 30-60 min of REAL attempt time, not wall-clock
+// time since queued - a phone asleep for hours must not silently burn
+// through this. Each attempt adds the wall-clock gap since the previous
+// attempt to attemptMs, capped at OUTBOX_MAX_GAP_MS (comfortably above the
+// 60s steady backoff interval) - so a normal backoff cycle counts close to
+// its real duration, but a multi-hour sleep/closed-app gap contributes at
+// most that cap, not the hours it actually spanned.
+const OUTBOX_STALLED_THRESHOLD_MS = 45 * 60 * 1000;
+const OUTBOX_MAX_GAP_MS = 90 * 1000;
+
+let OUTBOX = { queue: [], needsAttention: [] };
+let outboxTimer = null;
+let outboxSending = false;
+
+function loadOutbox(){
+  try{
+    const raw = window.localStorage.getItem(OUTBOX_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      OUTBOX = { queue: parsed.queue || [], needsAttention: parsed.needsAttention || [] };
+    }
+  }catch(e){ /* start with an empty outbox rather than block boot */ }
+}
+function saveOutbox(){
+  try{ window.localStorage.setItem(OUTBOX_KEY, JSON.stringify(OUTBOX)); }
+  catch(e){ /* storage full/blocked - queue still works in-memory this session */ }
+}
+
+function enqueueOutbox({rpcName, params, localDate, label}){
+  const now = Date.now();
+  const entry = {
+    id: genUuid(), rpcName, params, localDate, label,
+    queuedAt: now, lastAttemptStartedAt: now,
+    attemptCount: 0, attemptMs: 0, stalled: false
+  };
+  OUTBOX.queue.push(entry);
+  saveOutbox();
+  scheduleNextOutboxAttempt();
+  return entry.id;
+}
+
+function outboxBackoffDelay(attemptCount){
+  const i = Math.min(attemptCount, OUTBOX_BACKOFF_SCHEDULE.length - 1);
+  return OUTBOX_BACKOFF_SCHEDULE[i];
+}
+
+// Arms the next unattended (timer-driven) attempt for whatever is currently
+// at the head of the queue. Deliberately does NOT arm a timer once that
+// entry is stalled - the online event and sendQueueNow() call
+// attemptSendHead() directly instead, bypassing this gate entirely, which
+// is what keeps a stalled entry eligible for those two triggers while no
+// longer being retried unattended in the background.
+function scheduleNextOutboxAttempt(){
+  if(outboxTimer){ clearTimeout(outboxTimer); outboxTimer = null; }
+  const head = OUTBOX.queue[0];
+  if(!head || head.stalled) return;
+  outboxTimer = setTimeout(() => attemptSendHead(), outboxBackoffDelay(head.attemptCount));
+}
+
+async function attemptSendHead(){
+  if(outboxSending) return;
+  const head = OUTBOX.queue[0];
+  if(!head) return;
+  outboxSending = true;
+  if(outboxTimer){ clearTimeout(outboxTimer); outboxTimer = null; }
+
+  const now = Date.now();
+  const gap = now - (head.lastAttemptStartedAt || head.queuedAt);
+  head.attemptMs = (head.attemptMs || 0) + Math.min(Math.max(gap, 0), OUTBOX_MAX_GAP_MS);
+  head.lastAttemptStartedAt = now;
+  head.attemptCount = (head.attemptCount || 0) + 1;
+
+  let res;
+  try{
+    res = await callRpc(head.rpcName, head.params);
+  }catch(e){
+    // callRpc is built to always resolve to {ok,error,noReply}, never throw -
+    // guarded anyway so a genuinely unexpected exception can't wedge the
+    // outbox on this entry forever.
+    res = { ok:false, error: String((e && e.message) || e), noReply:true };
+  }
+
+  if(res.ok){
+    OUTBOX.queue.shift();
+  } else if(!res.noReply){
+    // A real reply arrived this time - a genuine refusal (a stale
+    // precondition or any other real server answer), not another silent
+    // failure. Pulled out of the queue immediately: never re-queued, never
+    // auto-retried again.
+    OUTBOX.queue.shift();
+    OUTBOX.needsAttention.push({
+      id: head.id, rpcName: head.rpcName, params: head.params, localDate: head.localDate,
+      label: head.label, queuedAt: head.queuedAt, resolvedAt: Date.now(), error: res.error
+    });
+  } else {
+    if(head.attemptMs >= OUTBOX_STALLED_THRESHOLD_MS) head.stalled = true;
+  }
+
+  saveOutbox();
+  outboxSending = false;
+  scheduleNextOutboxAttempt();
+}
+
+// Like every other trigger, sendQueueNow() only ever attempts the current
+// head - stalled or not. It deliberately does NOT walk past a stalled head
+// to reach non-stalled entries behind it. Strict single-head ordering
+// exists specifically because some queued actions depend on ones ahead of
+// them actually landing - open_day before receive_stock/sell/return/
+// submit_eod/close_day for the same shop+date is the concrete case this was
+// built for - and the client can never be sure whether a stalled entry's
+// original request actually reached the server or not, which is exactly
+// why skipping it to send something that might depend on it isn't safe. A
+// stalled entry blocks everything behind it, automatic AND manual, until it
+// resolves one way or another (a real reply, success or error) or someone
+// manually retries it and it goes through.
+function sendQueueNow(){ return attemptSendHead(); }
+window.addEventListener('online', function(){ attemptSendHead(); });
+
+function getOutboxQueue(){ return OUTBOX.queue.slice(); }
+function getOutboxNeedsAttention(){ return OUTBOX.needsAttention.slice(); }
+function getOutboxCounts(){ return { queued: OUTBOX.queue.length, needsAttention: OUTBOX.needsAttention.length }; }
+
+// What B2's needs-attention UI buttons will call. Permanent discard, or
+// send it around again - re-enqueued at the BACK of the queue (never
+// jumping ahead of whatever's already waiting), fresh retry state, but the
+// exact same params object and idempotency key it always had.
+function discardNeedsAttention(id){
+  const before = OUTBOX.needsAttention.length;
+  OUTBOX.needsAttention = OUTBOX.needsAttention.filter(e => e.id !== id);
+  const removed = OUTBOX.needsAttention.length < before;
+  if(removed) saveOutbox();
+  return removed;
+}
+function retryNeedsAttentionEntry(id){
+  const idx = OUTBOX.needsAttention.findIndex(e => e.id === id);
+  if(idx === -1) return false;
+  const item = OUTBOX.needsAttention[idx];
+  OUTBOX.needsAttention.splice(idx, 1);
+  const now = Date.now();
+  OUTBOX.queue.push({
+    id: item.id, rpcName: item.rpcName, params: item.params, localDate: item.localDate, label: item.label,
+    queuedAt: now, lastAttemptStartedAt: now,
+    attemptCount: 0, attemptMs: 0, stalled: false
+  });
+  saveOutbox();
+  scheduleNextOutboxAttempt();
+  return true;
+}
+
 function cacheKey(shopId){ return 'twcache_' + shopId + (ADMIN_SESSION ? '_admin' : '_staff'); }
 function hydrateFromCache(shopId){
   try{
@@ -3144,6 +3305,11 @@ function showSuccessThenGeneric(msg, nextView){
 
 async function init(){
   try{
+    // Resume the outbox before anything else - independent of sb/network,
+    // so a queued entry from before the last reload starts trying again
+    // without any user action.
+    loadOutbox();
+    scheduleNextOutboxAttempt();
     document.getElementById('app').innerHTML = `<div class="content"><p class="lead">Loading...</p></div>`;
     // Tests inject window.__SB_OVERRIDE__ before this script runs, so nothing
     // here ever needs the real internet or the owner's real data to be tested.
