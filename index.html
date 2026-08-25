@@ -551,26 +551,54 @@ async function openBizDayAction(shopId, date){
 // read. Business-rule refusals (like "the day isn't open") come back as
 // clear messages already written for a shop-floor audience; anything else
 // is treated as "can't reach the database right now."
+//
+// Nothing used to bound how long an RPC call could hang - confirmed live
+// that a request Chromium never responds to at all just sits there with no
+// signal, past 15s and presumably indefinitely. RPC_TIMEOUT_MS closes that:
+// past this long with no reply, callRpc gives up waiting and classifies it
+// the same as a network failure, rather than leaving the caller (and the
+// button) stuck forever.
+const RPC_TIMEOUT_MS = 20000;
 async function callRpc(name, params){
   if(!sb){
     SB_UNREACHABLE = true;
     SAVE_ERROR = "THAT ENTRY MAY NOT BE SAVED. The app could not reach the shared database. Check your internet and try again.";
-    return { ok:false, error: SAVE_ERROR };
+    return { ok:false, error: SAVE_ERROR, noReply: true };
   }
   try{
-    const { data, error } = await sb.rpc(name, params);
+    // sb.rpc() never actually throws on a network failure - confirmed live
+    // across connection-refused, DNS failure, connection reset, and a
+    // silent hang: it always resolves with a Postgrest-shaped
+    // {data:null, error:{message,details,hint,code}}, just with code set
+    // to '' and message set to the raw "TypeError: Failed to fetch". A
+    // real server reply (success or a genuine business refusal) always
+    // carries a real, non-empty code. The timeout branch below resolves
+    // with that exact same empty-code shape on purpose, so classification
+    // afterward doesn't need to know which of the two actually happened -
+    // "no code" always means "no real reply ever arrived."
+    const { data, error } = await Promise.race([
+      sb.rpc(name, params),
+      new Promise(resolve => setTimeout(() => resolve({
+        data: null,
+        error: { message: 'Request timed out', details: '', hint: '', code: '' }
+      }), RPC_TIMEOUT_MS))
+    ]);
     if(error) throw error;
     SB_UNREACHABLE = false;
     SAVE_ERROR = null;
-    return { ok:true, data };
+    return { ok:true, data, noReply: false };
   }catch(e){
+    // Empty/missing code = no real reply ever arrived (network failure or
+    // our own timeout above). A real, non-empty code - P0001 or otherwise -
+    // means the server actually answered, whatever that answer was.
+    const noReply = !(e && e.code);
     if(e && e.code === 'P0001' && e.message){
       SAVE_ERROR = e.message;   // a clear business-rule refusal written for staff to read
     } else {
       SB_UNREACHABLE = true;
       SAVE_ERROR = "THAT ENTRY MAY NOT BE SAVED. The app could not reach the shared database. Check your internet, then check whether it recorded.";
     }
-    return { ok:false, error: SAVE_ERROR };
+    return { ok:false, error: SAVE_ERROR, noReply };
   }
 }
 function cacheKey(shopId){ return 'twcache_' + shopId + (ADMIN_SESSION ? '_admin' : '_staff'); }
