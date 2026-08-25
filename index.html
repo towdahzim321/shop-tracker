@@ -1441,11 +1441,19 @@ async function closeBizDayAction(){
   if(!ok) return;
   const date = todayStr();
   const label = lockBtnSaving('closeDayBtn');
-  const res = await callRpc('staff_close_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: closeDayIdemKey});
+  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: closeDayIdemKey};
+  const res = await callRpc('staff_close_day', params);
   if(res.ok){
     closeDayIdemKey = null;
     await refreshShopData(S.shopId);
   } else {
+    if(res.noReply){
+      enqueueOutbox({ rpcName: 'staff_close_day', params, localDate: date, label: `Close day - ${date} (${shopName(S.shopId)})` });
+      // Fresh key, not null - a later manual close attempt (immediate
+      // re-tap or after reopening) must never collide with what's now
+      // queued under the old one.
+      closeDayIdemKey = genUuid();
+    }
     unlockBtn('closeDayBtn', label);
   }
   render();
@@ -1453,11 +1461,16 @@ async function closeBizDayAction(){
 async function openBizDayStaffAction(){
   const date = todayStr();
   const label = lockBtnSaving('openDayBtn');
-  const res = await callRpc('staff_open_day', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: openDayIdemKey});
+  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: openDayIdemKey};
+  const res = await callRpc('staff_open_day', params);
   if(res.ok){
     openDayIdemKey = null;
     await refreshShopData(S.shopId);
   } else {
+    if(res.noReply){
+      enqueueOutbox({ rpcName: 'staff_open_day', params, localDate: date, label: `Open day - ${date} (${shopName(S.shopId)})` });
+      openDayIdemKey = genUuid();
+    }
     unlockBtn('openDayBtn', label);
   }
   render();
@@ -1618,9 +1631,18 @@ async function confirmSale(){
   const num = parseFloat(val);
   if(!val || isNaN(num) || num<=0){ document.getElementById('priceErr').innerHTML = '<div class="err">Enter a valid sale price.</div>'; return; }
   const phoneId = selectedPhone.id;
+  const modelLabel = selectedPhone.model;
+  const date = todayStr();
   const label = lockBtnSaving('saleConfirmBtn');
-  const res = await callRpc('staff_sell_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_price: num, p_idempotency_key: saleIdemKey});
+  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId, p_price: num, p_idempotency_key: saleIdemKey};
+  const res = await callRpc('staff_sell_phone', params);
   if(!res.ok){
+    if(res.noReply){
+      // No key change here - pickSalePhone() always mints a fresh key
+      // unconditionally for any new sale, so nothing later can ever
+      // collide with what's now queued under this one.
+      enqueueOutbox({ rpcName: 'staff_sell_phone', params, localDate: date, label: `Sale - ${modelLabel} (${shopName(S.shopId)})` });
+    }
     unlockBtn('saleConfirmBtn', label);
     document.getElementById('priceErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
     return;
@@ -1707,9 +1729,17 @@ async function confirmReturn(){
   const parts = reason==='Faulty' ? (S.returnFaultParts||[]) : null;
   const notes = S.returnNotes || null;
   const isFaulty = reason === 'Faulty';
+  const modelLabel = selectedPhone.model;
+  const date = todayStr();
   const label = lockBtnSaving('returnConfirmBtn');
-  const res = await callRpc('staff_return_phone', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes, p_idempotency_key: returnIdemKey});
+  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes, p_idempotency_key: returnIdemKey};
+  const res = await callRpc('staff_return_phone', params);
   if(!res.ok){
+    if(res.noReply){
+      // Same reasoning as confirmSale - pickReturnPhone() always mints a
+      // fresh key unconditionally, so nothing here needs to change it.
+      enqueueOutbox({ rpcName: 'staff_return_phone', params, localDate: date, label: `Return - ${modelLabel} (${shopName(S.shopId)})` });
+    }
     unlockBtn('returnConfirmBtn', label);
     document.getElementById('returnErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
     return;
@@ -1950,16 +1980,31 @@ async function finishReceiving(){
   const lines = S.receiveBatch.lines || [];
   if(lines.length===0) return;
   const items = lines.map(l => ({ model: l.model, description: l.description || '', imeis: l.imeis }));
+  const totalPhones = items.reduce((a,it)=>a+it.imeis.length, 0);
+  const date = todayStr();
   const label = lockBtnSaving('receiveFinishBtn');
-  const res = await callRpc('staff_receive_stock', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: todayStr(), p_items: items, p_idempotency_key: S.receiveIdemKey});
+  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_items: items, p_idempotency_key: S.receiveIdemKey};
+  const res = await callRpc('staff_receive_stock', params);
   const app = document.getElementById('app');
   if(!res.ok){
+    let notSavedMsg = 'Nothing in this document was saved. Nothing else here has been lost — go back, fix the item causing the problem, and try again.';
+    if(res.noReply){
+      enqueueOutbox({ rpcName: 'staff_receive_stock', params, localDate: date, label: `Receive stock - ${totalPhones} phone(s) (${shopName(S.shopId)})` });
+      // Fresh key, not null - the document is still intact below (nothing
+      // reset), so a later Finish tap on the SAME or an expanded batch must
+      // never collide with what's now queued under the old one.
+      S.receiveIdemKey = genUuid();
+      // "Nothing was saved" would be a false claim once this is queued - it
+      // may well end up saved. The document itself and the retry flow below
+      // are unchanged; only this one line's wording changes.
+      notSavedMsg = 'Could not confirm this document was saved. It will keep trying to save automatically. Nothing else here has been lost — you can also go back and try again yourself.';
+    }
     unlockBtn('receiveFinishBtn', label);
     app.innerHTML = offlineBanner() + saveErrorBanner() + `
       ${topbar(shopName(S.shopId), '', true)}
       <div class="content">
         <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
-        <p class="lead">Nothing in this document was saved. Nothing else here has been lost — go back, fix the item causing the problem, and try again.</p>
+        <p class="lead">${esc(notSavedMsg)}</p>
         <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to this document</button>
       </div>`;
     return;
@@ -2016,8 +2061,17 @@ async function confirmEod(){
   if(isNaN(cash) || cash<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter the cash collected today.</div>'; return; }
   const today = todayStr();
   const label = lockBtnSaving('eodSubmitBtn');
-  const res = await callRpc('staff_submit_eod', {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: today, p_physical_count: count, p_faulty_count: faulty, p_cash: cash, p_idempotency_key: S.eodIdemKey});
+  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: today, p_physical_count: count, p_faulty_count: faulty, p_cash: cash, p_idempotency_key: S.eodIdemKey};
+  const res = await callRpc('staff_submit_eod', params);
   if(!res.ok){
+    if(res.noReply){
+      enqueueOutbox({ rpcName: 'staff_submit_eod', params, localDate: today, label: `End of day - ${today} (${shopName(S.shopId)})` });
+      // Fresh key, not null - a later resubmission with corrected figures
+      // (or an immediate re-tap) must never collide with what's now queued
+      // under the old one; a stale replay would silently keep the old
+      // numbers instead of recording the correction.
+      S.eodIdemKey = genUuid();
+    }
     unlockBtn('eodSubmitBtn', label);
     document.getElementById('eodErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
     return;
