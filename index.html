@@ -349,7 +349,24 @@
 </head>
 <body>
 <div id="app"></div>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// Registered before the library tag below so it's listening in time to catch
+// that specific tag's own load failure - resource-load errors fire only in
+// the capture phase, not the bubble phase, so this needs its own listener
+// rather than reusing the app's main (bubble-phase) window.onerror handler
+// further down. Kept as its own SCRIPT_LOAD_FAILED flag, distinct from
+// SB_UNREACHABLE, so "the library never arrived" (content blocker, blocked
+// CDN, 404) renders a different message than "the database is unreachable" -
+// they're different problems with different fixes for whoever's looking at
+// the phone.
+var SCRIPT_LOAD_FAILED = false;
+window.addEventListener('error', function(ev){
+  if(ev.target && ev.target.tagName === 'SCRIPT' && ev.target.id === 'supabaseLib'){
+    SCRIPT_LOAD_FAILED = true;
+  }
+}, true);
+</script>
+<script id="supabaseLib" src="supabase-js.2.112.4.js"></script>
 <script>
 // SHOPS and MODEL_LIST are loaded from the database at startup (see
 // loadShopsAndModels below) so the owner can add a shop or a model without
@@ -517,8 +534,16 @@ let CRITICAL_FLOW_IN_PROGRESS = false;
 // exists for: without it, a thrown error leaves the button stuck on
 // "Saving…" forever, with nothing left to ever redraw the screen.
 let RENDER_PENDING = false;
+// A failed supabaseLib load also makes SB_UNREACHABLE true (sb never gets
+// created), so without this check both banners would show at once - and
+// offlineBanner()'s "can't reach the shared database" text would be actively
+// wrong here, since the database was never even contacted.
+function scriptLoadFailedBanner(){
+  if(!SCRIPT_LOAD_FAILED) return '';
+  return `<div class="offline-strip">COULD NOT LOAD &middot; A required file failed to load, often caused by a content/ad blocker or a restrictive network - this is not a database problem. Try a different browser, or turn off content blockers for this page, then reload.</div>`;
+}
 function offlineBanner(){
-  if(!SB_UNREACHABLE) return '';
+  if(!SB_UNREACHABLE || SCRIPT_LOAD_FAILED) return '';
   const label = Object.keys(LAST_SYNC_AT).length ? 'Showing the last saved copy from this device.' : 'No saved copy on this device yet.';
   return `<div class="offline-strip">NOT CONNECTED &middot; Can't reach the shared database right now. ${label} New entries cannot be saved until the connection is back &mdash; check your internet and try again.</div>`;
 }
@@ -1158,7 +1183,7 @@ function render(){
   // site that forgets to clear it.
   if(S.staffId && ADMIN_SESSION) clearAdminSession();
   try{
-    app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -2227,7 +2252,7 @@ async function finishReceiving(){
       }
       unlockBtn('receiveFinishBtn', label);
       RENDER_PENDING = false;
-      app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+      app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
         ${topbar(shopName(S.shopId), '', true)}
         <div class="content">
           <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
@@ -2248,7 +2273,7 @@ async function finishReceiving(){
     await refreshShopData(S.shopId);
     await loadShopsAndModels(); // picks up any model staff just typed as new
     RENDER_PENDING = false;
-    app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
       ${topbar(shopName(S.shopId), '', false)}
       <div class="content">
         <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
@@ -2350,7 +2375,7 @@ function showSuccessThen(msg, nextView){
   RENDER_PENDING = false;
   const app = document.getElementById('app');
   const failed = !!SAVE_ERROR;
-  app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
       ${failed ? notSavedBox('That entry') : `<div class="success-box">
@@ -3617,7 +3642,7 @@ async function saveSettings(){
 }
 function showSuccessThenGeneric(msg, nextView){
   const app = document.getElementById('app');
-  app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar('Admin dashboard','',false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${esc(msg)}</div></div>

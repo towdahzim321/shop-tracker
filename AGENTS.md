@@ -89,3 +89,24 @@
   content, this trade-off needs revisiting (either render there too, or 
   patch in the fresher data alongside the error). Each call site carries a 
   one-line comment noting this.
+
+## Vendored dependencies (client)
+- `supabase-js.2.112.4.js` (repo root) is `@supabase/supabase-js@2.112.4`'s 
+  published UMD browser bundle (the same file its own `package.json` 
+  `jsdelivr`/`unpkg` fields point at: `dist/umd/supabase.js`), vendored 
+  in-repo instead of loaded from `cdn.jsdelivr.net` at page load.
+  - Why: the CDN was a single third-party point of failure at load time - a 
+    blocked/failed fetch (content blocker, restrictive network) left 
+    `window.supabase` undefined with no retry, which `index.html`'s `init()` 
+    silently turned into the same "not connected to database" banner used 
+    for a real outage, on one browser but not another on the same device.
+  - SHA256 of the vendored file: 
+    `f8ce7fab799af1916019cbd0b485b39bb80dbdbc6dc062909a751c9e5198e04c`
+  - To update the version: pull the new version's tarball from the npm 
+    registry (`npm pack @supabase/supabase-js@<version>`, not jsdelivr - use 
+    the canonical published artifact), confirm its `package.json` 
+    `jsdelivr`/`unpkg` field still points at `dist/umd/supabase.js`, copy 
+    that file in as `supabase-js.<version>.js`, update the `<script>` tag's 
+    `src` in `index.html`, record the new hash here, and remove the old 
+    version's file. Deliberately a manual, visible step - never re-point 
+    the existing filename at different content.

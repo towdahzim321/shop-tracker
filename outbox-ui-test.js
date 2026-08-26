@@ -726,6 +726,29 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  // ===========================================================================
+  console.log('\n== 17. Supabase library blocked (content-blocker simulation): SCRIPT_LOAD_FAILED shows its own message, not the generic "not connected" one ==');
+  {
+    const page = await browser.newPage();
+    page.on('pageerror', e => console.log('  PAGEERROR:', e.message));
+    // Block the vendored library specifically - a real network-level abort,
+    // not a synthetic dispatched event, so this exercises the actual
+    // capture-phase listener against a genuine failed resource load, the
+    // same way a content/ad blocker would kill the request.
+    await page.route('**/supabase-js.2.112.4.js', route => route.abort('blockedbyclient'));
+    await page.route('**/*supabase.co/**', route => route.abort('connectionrefused'));
+    await page.goto(FILE);
+    await page.waitForTimeout(500);
+
+    const t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('SCRIPT_LOAD_FAILED flag is set', (await page.evaluate(() => SCRIPT_LOAD_FAILED)) === true);
+    check('the specific "could not load" message is shown', /COULD NOT LOAD/.test(t), t.slice(0, 200));
+    check('the generic "not connected to database" message is NOT also shown', !/NOT CONNECTED/.test(t), t.slice(0, 200));
+    check('window.supabase itself never got defined', (await page.evaluate(() => typeof window.supabase)) === 'undefined');
+    check('the Supabase client (sb) is null as a result', (await page.evaluate(() => sb)) === null);
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);
