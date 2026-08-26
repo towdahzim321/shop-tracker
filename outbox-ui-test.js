@@ -749,6 +749,202 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  // ===========================================================================
+  console.log('\n== 18. Admin search & valuation: cross-shop search finds phones by IMEI, unpriced stock is excluded from the total ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      ADMIN_SESSION = { userId: 'u1', username: 'owner' };
+      SHOPS = [
+        { id: 'harare', name: 'Harare CBD', active: true, sortOrder: 1 },
+        { id: 'bulawayo1', name: 'Bulawayo Shop 1', active: true, sortOrder: 2 }
+      ];
+      SHOP_CACHE['harare'] = {
+        inventory: [
+          { id: 'p1', imei: '111122223333', model: 'iPhone 13', description: '128GB', batchId: 'b1', costPrice: 200, listPrice: 300, status: 'in_stock', receivedTs: 1 },
+          { id: 'p2', imei: '444455556666', model: 'iPhone 13', description: '128GB', batchId: 'b2', costPrice: null, listPrice: null, status: 'in_stock', receivedTs: 2 }
+        ],
+        dailyLogs: [], activity: [], businessDays: [], ledger: []
+      };
+      SHOP_CACHE['bulawayo1'] = {
+        inventory: [
+          { id: 'p3', imei: '777788889999', model: 'Pixel 8', description: '', batchId: 'b3', costPrice: 150, listPrice: 220, status: 'sold', receivedTs: 3 }
+        ],
+        dailyLogs: [], activity: [], businessDays: [], ledger: []
+      };
+      S = { view: 'ownerSearch' };
+      render();
+    });
+
+    // Real typing, not a synthetic evaluate() call - exercises the actual
+    // input-event listener wired up by attachOwnerSearchInput().
+    await page.fill('#ownerSearchInput', '3333');
+    await page.waitForTimeout(50);
+    const resultsText = await page.evaluate(() => document.getElementById('ownerSearchResults').innerText);
+    check('searching by a partial IMEI (from Harare) finds the phone', /iPhone 13/.test(resultsText));
+    check('search result shows the owning shop name', /Harare CBD/.test(resultsText));
+
+    await page.fill('#ownerSearchInput', 'pixel');
+    await page.waitForTimeout(50);
+    // Checked against the .list-item PHONE rows specifically, not the whole
+    // results blob - the ledger half of the search scans buildTransactions('all')
+    // regardless, so a check against the combined text would still pass even if
+    // the PHONES half were wrongly scoped to a single shop. This has to isolate
+    // the phones result list to actually prove that half is cross-shop.
+    const phoneRowsText2 = await page.evaluate(() => Array.from(document.querySelectorAll('#ownerSearchResults .list-item')).map(el => el.innerText).join(' | '));
+    check('a query only matching a DIFFERENT shop\'s PHONE (Bulawayo) still returns it in the phone results - phone search is cross-shop, not scoped to one shop', /Bulawayo Shop 1/.test(phoneRowsText2), phoneRowsText2);
+
+    // Valuation: only the priced phone (p1, $200) should count; the unpriced
+    // one (p2) must be excluded from the total and flagged instead.
+    const valuationText = await page.evaluate(() => document.getElementById('app').innerText);
+    check('valuation total includes the priced in-stock phone\'s cost ($200)', /\$200/.test(valuationText));
+    check('valuation flags the unpriced phone as a separate count, not silently zeroed into the total', /1 unpriced/.test(valuationText));
+    check('the all-shops alert banner reports exactly 1 phone missing a price', /1 phone\(s\) in stock have no cost price set/.test(valuationText));
+
+    // Clicking the unpriced flag navigates to the existing pricing screen for
+    // that shop - a real click, verifying the two features are wired together.
+    await page.locator('.chip-red', { hasText: 'unpriced' }).click();
+    check('tapping the unpriced flag navigates to ownerPricing for the right shop', (await page.evaluate(() => S.view)) === 'ownerPricing' && (await page.evaluate(() => S.mgmtShop)) === 'harare');
+
+    await page.close();
+  }
+
+  // ===========================================================================
+  console.log('\n== 19. Log an expense: seventh menu button (both day states), full CRITICAL_FLOW_IN_PROGRESS + idempotency flow ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [], expenses: [] };
+      render();
+    });
+    let t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('"Log an expense" appears even when the day is NOT open - the whole point of dropping require_day_open server-side', /Log an expense/.test(t));
+
+    await page.evaluate(() => {
+      SHOP_CACHE['harare'].businessDays = [{date: todayStr(), status: 'open'}];
+      render();
+    });
+    t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('"Log an expense" also appears once the day IS open, alongside the other six', /Log an expense/.test(t));
+
+    await installRealtimeBumpCapture(page, 'harare');
+    await installControllableRpc(page);
+    await installRenderCounter(page);
+
+    await page.evaluate(() => navTo('expense'));
+    await page.locator('.reason-btn', { hasText: 'Transport' }).click();
+    await page.fill('#expenseAmountInput', '5');
+    await page.fill('#expenseNoteInput', 'kombi fare');
+    page.locator('#expenseConfirmBtn').click();
+    await page.waitForTimeout(200);
+
+    check('CRITICAL_FLOW_IN_PROGRESS true while the expense RPC is in flight', (await page.evaluate(() => CRITICAL_FLOW_IN_PROGRESS)) === true);
+    check('button locked (disabled)', (await page.evaluate(() => document.getElementById('expenseConfirmBtn').disabled)) === true);
+    const keyBefore = await page.evaluate(() => S.expenseIdemKey);
+    const rendersBefore = await page.evaluate(() => window.__renderCalls);
+
+    await page.evaluate(() => { refreshOutboxUI(); });
+    await page.evaluate(() => { if (window.__realtimeBumpCallback) window.__realtimeBumpCallback(); });
+    await page.waitForTimeout(200);
+
+    check('no background render fired while in flight', (await page.evaluate(() => window.__renderCalls)) === rendersBefore);
+    check('S.expenseIdemKey unchanged by the background renders', (await page.evaluate(() => S.expenseIdemKey)) === keyBefore);
+    check('button still locked after the background events', (await page.evaluate(() => document.getElementById('expenseConfirmBtn').disabled)) === true);
+
+    await page.evaluate(() => window.__resolveRpc({ ok: true, data: null, noReply: false }));
+    await page.waitForTimeout(300);
+
+    check('expense logged - success box shown', (await page.evaluate(() => document.querySelector('.success-box') !== null)));
+    check('S.expenseIdemKey cleared to null on success', (await page.evaluate(() => S.expenseIdemKey)) === null);
+    check('CRITICAL_FLOW_IN_PROGRESS reset to false once resolved', (await page.evaluate(() => CRITICAL_FLOW_IN_PROGRESS)) === false);
+    check('callRpc was only ever called once - no duplicate submission slipped through', (await page.evaluate(() => window.__rpcCalls)) === 1);
+    await page.close();
+  }
+
+  // ===========================================================================
+  console.log('\n== 20. EOD rollup: "Expenses today" is display-only, filtered to today, no variance calculation ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'eod', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = {
+        inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [],
+        expenses: [
+          { id: 'e1', shopId: 'harare', date: todayStr(), category: 'Transport', amount: 5, note: 'kombi', staffId: 's1', staffName: 'Test', createdAt: Date.now() },
+          { id: 'e2', shopId: 'harare', date: todayStr(), category: 'Airtime/data', amount: 2.5, note: null, staffId: 's1', staffName: 'Test', createdAt: Date.now() },
+          { id: 'e3', shopId: 'harare', date: '2020-01-01', category: 'Other', amount: 999, note: 'old, must not count', staffId: 's1', staffName: 'Test', createdAt: Date.now() }
+        ]
+      };
+      render();
+    });
+    const t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('shows the combined total for today\'s two expenses ($7.5), not the old one', /Expenses today: \$7\.5 \(2 logged\)/.test(t), t.slice(0, 300));
+    check('does not fold in the differently-dated expense\'s amount ($999)', !/999/.test(t));
+    check('no variance/mismatch language anywhere on this screen - display only, as scoped', !/variance/i.test(t) && !/mismatch/i.test(t));
+    await page.close();
+  }
+
+  // ===========================================================================
+  console.log('\n== 21. Admin expenses screen: shop/date filtering, delete via admin_delete_expense ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      ADMIN_SESSION = { userId: 'u1', username: 'owner' };
+      SHOPS = [
+        { id: 'harare', name: 'Harare CBD', active: true, sortOrder: 1 },
+        { id: 'bulawayo1', name: 'Bulawayo Shop 1', active: true, sortOrder: 2 }
+      ];
+      SHOP_CACHE['harare'] = {
+        inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [],
+        expenses: [{ id: 'e1', shopId: 'harare', date: todayStr(), category: 'Transport', amount: 5, note: 'kombi', staffId: 's1', staffName: 'Tanatswa', createdAt: Date.now() }]
+      };
+      SHOP_CACHE['bulawayo1'] = {
+        inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [],
+        expenses: [{ id: 'e2', shopId: 'bulawayo1', date: todayStr(), category: 'ZESA', amount: 12, note: null, staffId: 's2', staffName: 'Pela', createdAt: Date.now() }]
+      };
+      S = { view: 'ownerExpenses' };
+      render();
+    });
+    let t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('all-shops view shows both shops\' expenses', /Harare CBD/.test(t) && /Bulawayo Shop 1/.test(t) && /Tanatswa/.test(t) && /Pela/.test(t));
+
+    await page.evaluate(() => { S.expShop = 'harare'; render(); });
+    t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('filtering to one shop hides the other shop\'s expense', /Tanatswa/.test(t) && !/Pela/.test(t));
+
+    await page.evaluate(() => { S.expDate = '2019-01-01'; render(); });
+    t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('filtering to a non-matching date shows nothing', /No expenses for this filter/.test(t));
+
+    await page.evaluate(() => { S.expDate = todayStr(); render(); });
+    await installControllableRpc(page);
+    // deleteExpense() awaits refreshShopData(shopId) on success - stubbed the
+    // same way every other test in this file stubs it, otherwise it runs
+    // against a real (blocked) Supabase client, which resolves but takes
+    // several seconds per call, not because anything is actually wrong.
+    // Simulates what a real refresh would show post-deletion by actually
+    // removing the row, rather than just returning the untouched cache.
+    await page.evaluate(() => {
+      window.refreshShopData = (id) => {
+        if (SHOP_CACHE[id]) SHOP_CACHE[id].expenses = SHOP_CACHE[id].expenses.filter(e => e.id !== 'e1');
+        return Promise.resolve(SHOP_CACHE[id] || emptyShopData());
+      };
+    });
+    page.locator('button', { hasText: 'Delete' }).first().click();
+    await page.waitForTimeout(150);
+    await page.locator('.modal-overlay .yes, .modal-overlay .yes-safe').click();
+    await page.waitForTimeout(100);
+    check('confirm modal required before deleting - RPC not called until confirmed', (await page.evaluate(() => window.__rpcCalls)) === 1);
+    check('deletion targets the real admin_delete_expense RPC with the right id', (await page.evaluate(() => window.__lastRpcName)) === 'admin_delete_expense');
+    await page.evaluate(() => window.__resolveRpc({ ok: true, data: null, noReply: false }));
+    await page.waitForTimeout(200);
+    t = await page.evaluate(() => document.getElementById('app').innerText);
+    check('deleted expense no longer shown after the screen refreshes', !/Tanatswa/.test(t));
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);

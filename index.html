@@ -384,6 +384,9 @@ const SUPABASE_ANON_KEY = 'sb_publishable_RgCpLFTYc2IMZbbaoEy2LA_SsQ0heGc';
 const DEFAULT_LOW_STOCK = 3;
 const RETURN_REASONS = ['Faulty','Wrong item','Changed mind','Other'];
 const FAULT_PARTS = ['Screen/LCD','Battery','Camera','Charging port','Speaker/Mic','Network/Signal','Buttons','Back cover/glass','Software','Water damage','Other'];
+// Must match staff_log_expense's server-side list exactly (part7-expenses.sql)
+// - the RPC is the real enforcement, this is just what the picker offers.
+const EXPENSE_CATEGORIES = ['Transport','Airtime/data','Bank charges','Electricity (ZESA)','Stationery/packaging','Cleaning','Repairs/maintenance','Staff refreshments','Security','Other'];
 // Same offline-fallback idea as SHOPS_FALLBACK above, grouped by brand the
 // way the picker has always displayed it. MODEL_LIST (below) is the live,
 // flat, database-backed list actually used once loaded.
@@ -595,7 +598,7 @@ async function saveLowStockThreshold(n){
   }
 }
 
-function emptyShopData(){ return { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [] }; }
+function emptyShopData(){ return { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [], expenses: [] }; }
 function getBizDay(data, date){ return (data.businessDays||[]).find(b=>b.date===date); }
 function isDayOpen(data, date){ const b = getBizDay(data,date); return !!b && b.status==='open'; }
 function bizDayBanner(data, shopId, date){
@@ -829,10 +832,10 @@ function outboxAgo(ts){
   const hrs = Math.round(mins/60);
   return hrs + (hrs===1?' hour ago':' hours ago');
 }
-// What each of the six screens calls to find whether the action it's about
-// to offer is already sitting in the queue - so it can show a locked
-// "queued" state instead of a normal button. matchParams runs against the
-// queued entry's own params object (the exact one that was sent).
+// What each of the seven staff action screens calls to find whether the
+// action it's about to offer is already sitting in the queue - so it can
+// show a locked "queued" state instead of a normal button. matchParams runs
+// against the queued entry's own params object (the exact one that was sent).
 function findQueuedOutboxEntry(rpcName, matchParams){
   return OUTBOX.queue.find(e => e.rpcName === rpcName && matchParams(e.params));
 }
@@ -987,7 +990,18 @@ function mapLedgerRow(r){
     by: r.by_staff ? (STAFF_NAME_INDEX[r.by_staff] || 'staff') : (r.by_admin || null),
     note: r.note,
     reason: extra.reason, faultParts: extra.faultParts, notes: extra.notes, toFaulty: extra.toFaulty,
-    belowPrice: extra.belowPrice, shortfall: extra.shortfall, batchId: extra.batchId
+    belowPrice: extra.belowPrice, shortfall: extra.shortfall, batchId: extra.batchId,
+    // expense/deleted_expense only - named expenseNote/expenseDate, not
+    // note/date, so they can't collide with this row's own top-level note
+    // (r.note, a different column) or a phone-sale's dateSold-style fields.
+    category: extra.category, expenseNote: extra.note, expenseDate: extra.expenseDate
+  };
+}
+function mapExpenseRow(r){
+  return {
+    id: r.id, shopId: r.shop_id, date: r.date, category: r.category, amount: r.amount, note: r.note,
+    staffId: r.staff_id, staffName: STAFF_NAME_INDEX[r.staff_id] || 'staff',
+    createdAt: r.created_at ? new Date(r.created_at).getTime() : null
   };
 }
 function ledgerEntryText(e){
@@ -1002,6 +1016,8 @@ function ledgerEntryText(e){
     case 'undo_sale': return 'Sale undone by '+who+': '+nm;
     case 'undo_return': return 'Return undone by '+who+': '+nm;
     case 'deleted': return 'Entry deleted by '+who+': '+nm;
+    case 'expense': return who+' logged an expense: '+e.category+' - '+money(e.price)+(e.expenseNote?' ('+e.expenseNote+')':'');
+    case 'deleted_expense': return 'Expense deleted by '+who+': '+e.category+' - '+money(e.price);
     default: return e.note || (who+' - '+e.type);
   }
 }
@@ -1048,25 +1064,36 @@ async function refreshShopData(shopId){
   const logsPromise = isAdmin
     ? sb.from('daily_logs').select('*').eq('shop_id', shopId)
     : sb.rpc('staff_recent_daily_logs', {p_shop_id: shopId});
+  // Admin browses every expense ever logged for this shop (the admin
+  // expenses screen filters by shop/date client-side, same as
+  // screenOwnerTransactions does for the ledger); staff only ever need
+  // today's, via the same narrow-RPC-door pattern as staff_recent_daily_logs
+  // - RLS blocks a raw table read for non-admins regardless of this branch.
+  const expensesPromise = isAdmin
+    ? sb.from('expenses').select('*').eq('shop_id', shopId)
+    : sb.rpc('staff_today_expenses', {p_shop_id: shopId, p_local_date: todayStr()});
   try{
-    const [phonesRes, logsRes, daysRes, ledgerRes] = await Promise.all([
+    const [phonesRes, logsRes, daysRes, ledgerRes, expensesRes] = await Promise.all([
       sb.from(phonesTable).select('*').eq('shop_id', shopId),
       logsPromise,
       sb.from('business_days').select('*').eq('shop_id', shopId),
-      sb.from(ledgerTable).select('*').eq('shop_id', shopId).order('ts',{ascending:false}).limit(5000)
+      sb.from(ledgerTable).select('*').eq('shop_id', shopId).order('ts',{ascending:false}).limit(5000),
+      expensesPromise
     ]);
     if(phonesRes.error) throw phonesRes.error;
     if(logsRes.error) throw logsRes.error;
     if(daysRes.error) throw daysRes.error;
     if(ledgerRes.error) throw ledgerRes.error;
-    await ensureStaffNames(ledgerRes.data.map(r=>r.by_staff).concat(logsRes.data.map(r=>r.submitted_by)));
+    if(expensesRes.error) throw expensesRes.error;
+    await ensureStaffNames(ledgerRes.data.map(r=>r.by_staff).concat(logsRes.data.map(r=>r.submitted_by)).concat(expensesRes.data.map(r=>r.staff_id)));
     const ledger = ledgerRes.data.map(mapLedgerRow);
     const data = {
       inventory: phonesRes.data.map(mapPhoneRow),
       dailyLogs: logsRes.data.map(mapLogRow),
       businessDays: daysRes.data.map(mapDayRow),
       ledger,
-      activity: ledger.map(e => ({ ts: e.ts, type: e.type, text: ledgerEntryText(e) }))
+      activity: ledger.map(e => ({ ts: e.ts, type: e.type, text: ledgerEntryText(e) })),
+      expenses: expensesRes.data.map(mapExpenseRow)
     };
     SHOP_CACHE[shopId] = data;
     SB_UNREACHABLE = false;
@@ -1441,7 +1468,7 @@ function renderMenuPanel(){
 // navigating, but this is the one place that actually renders a view, so it's
 // the backstop that stays correct even if a future call site forgets to
 // check, or S.view ends up here some other way (stale back-stack, etc).
-const OWNER_ONLY_VIEWS = ['ownerDash','ownerSettings','wipeShop','ownerManage','ownerPricing','ownerDayReport','ownerTransactions','ownerCashDetail','ownerFaulty'];
+const OWNER_ONLY_VIEWS = ['ownerDash','ownerSettings','wipeShop','ownerManage','ownerPricing','ownerDayReport','ownerTransactions','ownerCashDetail','ownerFaulty','ownerSearch','ownerExpenses'];
 function viewFor(v){
   if(OWNER_ONLY_VIEWS.indexOf(v) !== -1 && !ADMIN_SESSION){
     return screenAdminLogin();
@@ -1458,6 +1485,7 @@ function viewFor(v){
     case 'return': return screenReturn();
     case 'returnReason': return screenReturnReason();
     case 'receive': return screenReceive();
+    case 'expense': return screenExpense();
     case 'eod': return screenEod();
     case 'adminLogin': return screenAdminLogin();
     case 'ownerDash': return screenOwnerDash();
@@ -1469,6 +1497,8 @@ function viewFor(v){
     case 'ownerTransactions': return screenOwnerTransactions();
     case 'ownerCashDetail': return screenOwnerCashDetail();
     case 'ownerFaulty': return screenOwnerFaulty();
+    case 'ownerSearch': return screenOwnerSearch();
+    case 'ownerExpenses': return screenOwnerExpenses();
     case 'stockSheet': return screenStockSheet();
     default: return screenHome();
   }
@@ -1601,8 +1631,14 @@ function screenStaffMenu(){
       ? `<div class="warn-banner">Today's business day (${esc(today)}) is closed.</div>`
       : `<div class="warn-banner">Today's business day (${esc(today)}) is not open yet.</div>`;
     const queuedOpen = findQueuedOutboxEntry('staff_open_day', p => p.p_shop_id === S.shopId && p.p_local_date === today);
-    actionButtons = queuedOpen ? queuedActionNotice(queuedOpen)
-      : `<button class="btn btn-primary btn-full-center" id="openDayBtn" onclick="openBizDayStaffAction()">Open today's business day</button>`;
+    actionButtons = (queuedOpen ? queuedActionNotice(queuedOpen)
+      : `<button class="btn btn-primary btn-full-center" id="openDayBtn" onclick="openBizDayStaffAction()">Open today's business day</button>`)
+      // Deliberately available even though the day isn't open - the whole
+      // reason staff_log_expense drops require_day_open is to cover money
+      // spent before the day opens (a bank-transport fare at 8am). If this
+      // button only existed in the day-open branch below, that server-side
+      // flexibility would have no way to be reached.
+      + `<button class="btn btn-outline btn-full-center" onclick="navTo('expense')">Log an expense</button>`;
   } else {
     statusBanner = `<div class="warn-banner" style="background:var(--green-bg);color:#0E5C46;">Today's business day (${esc(today)}) is open.</div>`;
     if(eodDone && !closeDayIdemKey) closeDayIdemKey = genUuid();
@@ -1611,6 +1647,7 @@ function screenStaffMenu(){
     <button class="btn btn-primary" onclick="navTo('sale')">Sold a phone</button>
     <button class="btn btn-primary" onclick="navTo('return')">Client return</button>
     <button class="btn btn-primary" onclick="navTo('receive')">Received new stock</button>
+    <button class="btn btn-primary" onclick="navTo('expense')">Log an expense</button>
     <button class="btn btn-amber" onclick="navTo('eod')">End of day: count &amp; cash</button>
     ${eodDone
       ? (queuedClose ? queuedActionNotice(queuedClose) : `<button class="btn btn-outline" id="closeDayBtn" style="border-color:var(--red);color:var(--red);" onclick="closeBizDayAction()">Close business day</button>`)
@@ -1993,6 +2030,92 @@ async function confirmReturn(){
   }
 }
 
+// No requireOpenDay() gate, unlike every other staff screen - deliberate,
+// matching staff_log_expense dropping require_day_open server-side. Money
+// spent before the day opens or after it closes still needs to be logged.
+function syncExpenseFields(){
+  const a = document.getElementById('expenseAmountInput'); if(a) S.expenseAmount = a.value;
+  const n = document.getElementById('expenseNoteInput'); if(n) S.expenseNote = n.value;
+}
+function selectExpenseCategory(cat){
+  syncExpenseFields();
+  S.expenseCategory = cat;
+  render();
+}
+function screenExpense(){
+  // Lazy-minted on render, like S.eodIdemKey/S.receiveIdemKey - there's no
+  // separate pick-then-navigate step here (unlike saleIdemKey/returnIdemKey,
+  // which are module-level lets specifically because they have to survive a
+  // navTo() that would wipe an S field), so this needs no special handling
+  // to persist.
+  if(!S.expenseIdemKey) S.expenseIdemKey = genUuid();
+  // Scoped to the exact queued key, not shop+date (EOD's approach) - staff
+  // can legitimately have more than one independent expense queued the same
+  // day (two separate taxi fares), so shop+date scoping would incorrectly
+  // block logging a second, different one. Matches receive stock's
+  // S.receiveQueuedKey reasoning exactly.
+  const queued = S.expenseQueuedKey ? findQueuedOutboxEntry('staff_log_expense', p => p.p_idempotency_key === S.expenseQueuedKey) : null;
+  return `
+  ${topbar(shopName(S.shopId), 'Log an expense', true)}
+  <div class="content">
+    <div class="reason-grid" id="expenseCategoryGrid">
+      ${EXPENSE_CATEGORIES.map(c=>`<div class="reason-btn ${S.expenseCategory===c?'selected':''}" data-c="${esc(c)}" onclick="selectExpenseCategory('${esc(c)}')">${esc(c)}</div>`).join('')}
+    </div>
+    <div class="field">
+      <label>Amount ($)</label>
+      <input type="tel" inputmode="decimal" id="expenseAmountInput" placeholder="e.g. 5" value="${esc(S.expenseAmount||'')}" ${queued?'disabled':''}>
+    </div>
+    <div class="field">
+      <label>Note (optional)</label>
+      <input type="text" id="expenseNoteInput" placeholder="e.g. Kombi fare to the bank" value="${esc(S.expenseNote||'')}" ${queued?'disabled':''}>
+    </div>
+    <div id="expenseErr"></div>
+    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-primary btn-full-center" id="expenseConfirmBtn" onclick="confirmExpense()">Log expense</button>`}
+  </div>`;
+}
+async function confirmExpense(){
+  syncExpenseFields();
+  if(!S.expenseCategory){ document.getElementById('expenseErr').innerHTML = '<div class="err">Pick a category.</div>'; return; }
+  const amt = parseFloat((S.expenseAmount||'').trim());
+  if(isNaN(amt) || amt<=0){ document.getElementById('expenseErr').innerHTML = '<div class="err">Enter an amount greater than zero.</div>'; return; }
+  const category = S.expenseCategory;
+  const note = (S.expenseNote||'').trim() || null;
+  const date = todayStr();
+  const label = lockBtnSaving('expenseConfirmBtn');
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_category: category, p_amount: amt, p_note: note, p_idempotency_key: S.expenseIdemKey};
+    const res = await callRpc('staff_log_expense', params);
+    if(!res.ok){
+      if(res.noReply){
+        enqueueOutbox({ rpcName: 'staff_log_expense', params, localDate: date, label: `Expense - ${category} ${money(amt)} (${shopName(S.shopId)})` });
+        // Fresh key, not null - same reasoning as receive stock: the form
+        // is still intact below (nothing reset), so a later Log tap on the
+        // SAME or a different expense must never collide with what's now
+        // queued under the old one.
+        S.expenseQueuedKey = S.expenseIdemKey;
+        S.expenseIdemKey = genUuid();
+      }
+      unlockBtn('expenseConfirmBtn', label);
+      // Trade-off: clears without rendering - safe only because this screen
+      // shows no live SHOP_CACHE data. Revisit if that changes.
+      RENDER_PENDING = false;
+      document.getElementById('expenseErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+      return;
+    }
+    await refreshShopData(S.shopId);
+    S.expenseIdemKey = null;
+    S.expenseQueuedKey = null;
+    S.expenseCategory = null;
+    S.expenseAmount = null;
+    S.expenseNote = null;
+    showSuccessThen('Expense logged.', 'staffMenu');
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
+  }
+}
+
 function screenReceive(){
   if(!requireOpenDay()) return dayNotOpenScreen();
   if(!S.receiveBatch){ S.receiveBatch = {lines:[]}; S.receiveIdemKey = genUuid(); }
@@ -2303,10 +2426,20 @@ function screenEod(){
   // anywhere. Matched on shop+date, not a specific key, since there's only
   // ever one EOD per shop per day.
   const queued = findQueuedOutboxEntry('staff_submit_eod', p => p.p_shop_id === S.shopId && p.p_local_date === today);
+  // Display only - no comparison to cash/revenue. staff_today_expenses (for
+  // staff) / a direct expenses read (for admin) already scopes this to
+  // exactly today for this shop, so no further date filtering is needed
+  // here, but data.expenses could in principle hold other dates too (an
+  // admin viewing this via loadShopData gets the shop's full history), so
+  // this still filters explicitly rather than assuming the cache is
+  // pre-scoped.
+  const todaysExpenses = (data.expenses||[]).filter(e=>e.date===today);
+  const expenseTotal = todaysExpenses.reduce((a,e)=>a+e.amount,0);
   return `
   ${topbar(shopName(S.shopId), 'End of day', true)}
   <div class="content">
     ${existing ? `<div class="warn-banner">You already submitted today's count and cash. Submitting again will replace it.</div>` : ''}
+    <div style="font-size:13px;color:var(--text-soft);margin-bottom:14px;">Expenses today: ${money(expenseTotal)} (${todaysExpenses.length} logged)</div>
     <div class="field">
       <label>1. Good phones on the shelf (count them now, one by one)</label>
       <input type="tel" inputmode="numeric" id="eodCount" value="${existing?existing.physicalCount:''}" placeholder="e.g. 42" ${queued?'disabled':''}>
@@ -2675,9 +2808,68 @@ function screenOwnerDash(){
     ${tabsHtml}
     ${body}
     <div style="margin-top:10px;text-align:center;">
+      <button class="link-btn" onclick="navTo('ownerSearch')">Search &amp; valuation</button>
+      <button class="link-btn" onclick="navTo('ownerExpenses')">Expenses</button>
       <button class="link-btn" onclick="navTo('ownerSettings')">Settings</button>
     </div>
   </div>`;
+}
+function setExpFilter(key, val){ S[key] = val; render(); }
+function screenOwnerExpenses(){
+  const shopKey = S.expShop || 'all';
+  const date = S.expDate || todayStr();
+  let rows = [];
+  SHOPS.forEach(s=>{
+    if(shopKey!=='all' && s.id!==shopKey) return;
+    const data = SHOP_CACHE[s.id] || emptyShopData();
+    (data.expenses||[]).forEach(e=>rows.push(Object.assign({}, e, {shopId: s.id})));
+  });
+  if(date) rows = rows.filter(e=>e.date===date);
+  rows.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const total = rows.reduce((a,e)=>a+e.amount,0);
+  return `
+  ${topbar('Expenses', shopKey==='all' ? 'All shops' : shopName(shopKey), true)}
+  <div class="content">
+    <div class="tabs">
+      <div class="tab ${shopKey==='all'?'active':''}" onclick="setExpFilter('expShop','all')">All shops</div>
+      ${SHOPS.map(s=>`<div class="tab ${shopKey===s.id?'active':''}" onclick="setExpFilter('expShop','${s.id}')">${esc(s.name)}</div>`).join('')}
+    </div>
+    <div class="field">
+      <label>Date</label>
+      <input type="date" value="${esc(date)}" onchange="setExpFilter('expDate', this.value)">
+    </div>
+    <div class="stat" style="margin-bottom:16px;">
+      <div class="label">Total for this filter</div>
+      <div class="value">${money(total)}</div>
+    </div>
+    <div class="card">
+      ${rows.length===0 ? '<div class="empty">No expenses for this filter.</div>' : rows.map(e=>`
+        <div class="activity-row">
+          <div class="txt">
+            <strong>${esc(e.category)}</strong> - ${money(e.amount)}${shopKey==='all' ? ' &middot; '+esc(shopName(e.shopId)) : ''}
+            ${e.note ? '<div class="imei">'+esc(e.note)+'</div>' : ''}
+            <div class="imei">by ${esc(e.staffName)}</div>
+          </div>
+          <div class="time">
+            ${e.createdAt ? new Date(e.createdAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : ''}
+            <div><button class="link-btn" style="color:var(--red);" onclick="deleteExpense('${e.id}','${e.shopId}')">Delete</button></div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+// Doesn't reuse adminAction() - that always refreshes S.mgmtShop, which
+// isn't meaningful on this screen (it's cross-shop, like ownerSearch; a
+// deleted row's shop isn't necessarily S.mgmtShop, which may not even be
+// set here). Refreshes the specific shop the deleted expense belonged to
+// instead.
+async function deleteExpense(expenseId, shopId){
+  if(!await askConfirm('Delete this expense entry? This cannot be undone.', 'Yes, delete it')) return;
+  const res = await callRpc('admin_delete_expense', {p_expense_id: expenseId});
+  if(res.ok) await refreshShopData(shopId);
+  else await askAlert(res.error);
+  render();
 }
 function renderStockByModel(data){
   const inStock = data.inventory.filter(p=>p.status==='in_stock');
@@ -2728,6 +2920,131 @@ function renderStockByModelAll(allData){
       <td>${grandTotal}</td>
     </tr>
   </table></div>`;
+}
+// Valuation for ONE shop's in-stock phones. Unlike renderStockByModel's
+// (p.costPrice||0), a null cost price here is excluded from `value` and
+// counted separately in `unpriced` - this screen's whole point is a
+// trustworthy dollar total, so a missing price must not silently become $0.
+function computeShopValuation(data){
+  const inStock = data.inventory.filter(p=>p.status==='in_stock');
+  let units=0, value=0, unpriced=0;
+  inStock.forEach(p=>{
+    units++;
+    if(p.costPrice===null || p.costPrice===undefined) unpriced++;
+    else value += p.costPrice;
+  });
+  return { units, value, unpriced };
+}
+function renderStockValuationSection(){
+  const perShop = SHOPS.map(s=>({ s, v: computeShopValuation(SHOP_CACHE[s.id] || emptyShopData()) }));
+  const totals = perShop.reduce((a,{v})=>({units:a.units+v.units, value:a.value+v.value, unpriced:a.unpriced+v.unpriced}), {units:0,value:0,unpriced:0});
+  const rows = perShop.map(({s,v})=>`
+    <tr>
+      <td>${esc(s.name)}</td>
+      <td>${v.units}</td>
+      <td>${money(v.value)}</td>
+      <td>${v.unpriced>0
+        ? `<span class="chip chip-red" style="cursor:pointer;" onclick="navTo('ownerPricing',{mgmtShop:'${s.id}'})">${v.unpriced} unpriced</span>`
+        : '<span class="chip chip-green">All priced</span>'}</td>
+    </tr>`).join('');
+  return `
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Stock value (priced items)</div><div class="value">${money(totals.value)}</div></div>
+      <div class="stat"><div class="label">Units in stock</div><div class="value">${totals.units}</div></div>
+    </div>
+    ${totals.unpriced>0 ? `<div class="alert-banner">${totals.unpriced} phone(s) in stock have no cost price set and are NOT included in the total above. Tap a shop's flag below, or use Set prices, to fix.</div>` : ''}
+    <div class="table-scroll"><table class="stock-table">
+      <tr><th>Shop</th><th>Units in stock</th><th>Cost value</th><th>Pricing</th></tr>
+      ${rows}
+      <tr class="total-row"><td>Total</td><td>${totals.units}</td><td>${money(totals.value)}</td><td>${totals.unpriced>0?totals.unpriced+' unpriced':'-'}</td></tr>
+    </table></div>`;
+}
+// Cross-shop admin search. Unlike attachSearchFilter (which hides/shows
+// .list-item nodes already rendered for one shop/status), this recomputes
+// matches from SHOP_CACHE across every shop and every phone status, plus
+// the ledger, on each keystroke - the dataset it searches was never
+// rendered as DOM to begin with.
+function searchAdminAll(query){
+  const q = query.trim().toLowerCase();
+  if(q.length < 2) return { phones: [], events: [], truncatedPhones: false, truncatedEvents: false };
+  const matchesPhone = p => (p.imei||'').toLowerCase().includes(q)
+    || (p.model||'').toLowerCase().includes(q)
+    || (p.description||'').toLowerCase().includes(q);
+  let phones = [];
+  SHOPS.forEach(s=>{
+    const data = SHOP_CACHE[s.id] || emptyShopData();
+    data.inventory.filter(matchesPhone).forEach(p=>phones.push(Object.assign({}, p, {shopId: s.id})));
+  });
+  phones.sort((a,b)=>(b.receivedTs||0)-(a.receivedTs||0));
+  const truncatedPhones = phones.length > 50;
+  if(truncatedPhones) phones = phones.slice(0, 50);
+
+  const matchesEvent = e => (e.imei||'').toLowerCase().includes(q)
+    || (e.model||'').toLowerCase().includes(q)
+    || (e.description||'').toLowerCase().includes(q)
+    || (e.by||'').toLowerCase().includes(q)
+    || (e.note||'').toLowerCase().includes(q)
+    || (e.reason||'').toLowerCase().includes(q);
+  let events = buildTransactions('all').filter(matchesEvent);
+  const truncatedEvents = events.length > 50;
+  if(truncatedEvents) events = events.slice(0, 50);
+
+  return { phones, events, truncatedPhones, truncatedEvents };
+}
+function adminSearchStatusChip(status){
+  return ({
+    in_stock: '<span class="chip chip-green">In stock</span>',
+    sold: '<span class="chip chip-gray">Sold</span>',
+    faulty: '<span class="chip chip-red">Faulty</span>',
+    written_off: '<span class="chip chip-red">Written off</span>'
+  })[status] || `<span class="chip chip-gray">${esc(status)}</span>`;
+}
+function renderAdminSearchResults(query){
+  const q = (query||'').trim();
+  if(q.length < 2) return '<div class="empty">Type at least 2 characters to search.</div>';
+  const { phones, events, truncatedPhones, truncatedEvents } = searchAdminAll(q);
+  if(phones.length===0 && events.length===0) return '<div class="empty">No matches in any shop.</div>';
+  const phonesHtml = phones.map(p=>`
+    <div class="list-item" style="cursor:default;">
+      <div class="model">${esc(p.model)}${p.description?' - '+esc(p.description):''} ${adminSearchStatusChip(p.status)}</div>
+      <div class="imei">IMEI: ${esc(p.imei)} &middot; ${esc(shopName(p.shopId))}</div>
+    </div>`).join('');
+  const eventsHtml = events.map(e=>`
+    <div class="activity-row">
+      <div class="txt"><span class="chip ${txChipClass(e.type)}">${typeLabel(e.type)}</span> ${esc(ledgerEntryText(e))} &middot; ${esc(shopName(e.shopId))}</div>
+      <div class="time">${new Date(e.ts).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+    </div>`).join('');
+  return `
+    <h3 style="font-size:14px;margin:14px 0 6px;">Phones${truncatedPhones?' (showing first 50)':''}</h3>
+    ${phones.length===0 ? '<div class="empty">No phone matches.</div>' : phonesHtml}
+    <h3 style="font-size:14px;margin:14px 0 6px;">Ledger history${truncatedEvents?' (showing first 50)':''}</h3>
+    ${events.length===0 ? '<div class="empty">No ledger matches.</div>' : `<div class="card">${eventsHtml}</div>`}
+  `;
+}
+function renderOwnerSearchResults(){
+  const el = document.getElementById('ownerSearchResults');
+  if(el) el.innerHTML = renderAdminSearchResults(document.getElementById('ownerSearchInput').value);
+}
+function attachOwnerSearchInput(){
+  const input = document.getElementById('ownerSearchInput');
+  if(!input) return;
+  input.addEventListener('input', renderOwnerSearchResults);
+}
+function screenOwnerSearch(){
+  setTimeout(()=>attachOwnerSearchInput(),0);
+  return `
+  ${topbar('Search & valuation', 'All shops', true)}
+  <div class="content">
+    <h2>Search</h2>
+    <div class="search-box field">
+      <label>Search by IMEI, model, or description &mdash; across all shops</label>
+      <input type="text" id="ownerSearchInput" placeholder="e.g. A15, last 4 digits of an IMEI, or a model name">
+    </div>
+    <div id="ownerSearchResults">${renderAdminSearchResults('')}</div>
+
+    <h2>Stock valuation</h2>
+    ${renderStockValuationSection()}
+  </div>`;
 }
 function screenOwnerFaulty(){
   const shopId = S.mgmtShop;
@@ -3363,9 +3680,10 @@ const CORE_TX_TYPES = ['sold','returned','received'];
 const TX_LABELS = {sold:'Sold', returned:'Returned', received:'Received', repaired:'Repaired', written_off:'Written off',
   undo_sale:'Sale undone', undo_return:'Return undone', deleted:'Entry deleted', deleted_eod:'Day log deleted',
   price_set:'Prices set', cash_confirmed:'Cash confirmed', cash_adjustment:'Cash adjusted', eod:'End of day', reopen:'Day reopened',
-  shop_added:'Shop added', shop_renamed:'Shop renamed', shop_closed:'Shop closed'};
+  shop_added:'Shop added', shop_renamed:'Shop renamed', shop_closed:'Shop closed',
+  expense:'Expense', deleted_expense:'Expense deleted'};
 function txChipClass(t){
-  if(t==='sold') return 'chip-red';
+  if(t==='sold' || t==='expense') return 'chip-red';
   if(t==='received' || t==='repaired') return 'chip-green';
   return 'chip-gray';
 }
