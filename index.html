@@ -1043,6 +1043,26 @@ function subscribeToShop(shopId){
     REALTIME_CHANNELS[shopId] = ch;
   }catch(e){ /* realtime is a nice-to-have; the poll timer still covers us */ }
 }
+// The one place a realtime channel actually gets removed - subscribeToShop()
+// only ever adds one, nothing else ever unsubscribes, and nothing else ever
+// clears S.shopId (go()'s `keep` list carries it forward on every
+// navigation). Left unchecked, both linger past the end of a staff session,
+// and bump()'s own render gate (S.shopId===shopId) would still match once
+// some later screen - the admin login form, among others - happens to be
+// showing while that stale S.shopId is still sitting there. Safe to call
+// freely: realtime is documented above as a snappiness upgrade over the 15s
+// poll fallback, which runs regardless, so dropping it here costs nothing a
+// staff member would notice beyond the same worst-case delay a failed
+// realtime connection already has today.
+function endShopPresence(){
+  if(S.shopId && REALTIME_CHANNELS[S.shopId]){
+    if(sb && typeof sb.removeChannel === 'function'){
+      try{ sb.removeChannel(REALTIME_CHANNELS[S.shopId]); }catch(e){}
+    }
+    delete REALTIME_CHANNELS[S.shopId];
+  }
+  S.shopId = null;
+}
 async function loadShopData(shopId){
   if(!SHOP_CACHE[shopId]) hydrateFromCache(shopId);
   subscribeToShop(shopId);
@@ -1209,6 +1229,20 @@ function render(){
   // than at each place staffId can get set, so it can't be missed by a call
   // site that forgets to clear it.
   if(S.staffId && ADMIN_SESSION) clearAdminSession();
+  // Same reasoning, same pattern, for S.shopId/the realtime channel it
+  // implies: if nobody has a confirmed session for it any more (no staffId,
+  // no admin session) and the current screen isn't one of the two that
+  // still need a chosen-but-not-yet-confirmed shop (staffPicker,
+  // staffPinEntry - a PIN hasn't succeeded yet, but a shop has already been
+  // picked), there's nothing left that should still be listening for it.
+  // Catches every way a staff session can end - change name, going home,
+  // reaching admin login - without any of those call sites needing to know
+  // about this. The one case this can't catch is a shop SWITCH, where
+  // S.shopId already points at the new shop by the time this runs -
+  // menuTapShop() handles that one explicitly, before the switch.
+  if(!S.staffId && !ADMIN_SESSION && S.shopId && ['staffPicker','staffPinEntry'].indexOf(S.view)===-1){
+    endShopPresence();
+  }
   try{
     app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
@@ -1389,7 +1423,12 @@ function menuTapShop(shopId){
   if(S.staffId){
     if(shop && shop.active === false) return; // closed shops aren't offered to staff
     if(shopId === S.shopId){ menuNavigate('staffMenu'); return; }
-    menuNavigate('staffPicker', {shopId}, ()=>{ S.staffId = null; S.staffName = null; });
+    // A genuine shop switch, not just a new PIN for the same one - S.shopId
+    // is about to become the NEW shop below, so render()'s own invariant
+    // could never see the OLD one again to clean it up. Has to happen here,
+    // inside beforeGo so it only runs once the switch is actually confirmed
+    // (not if the unsaved-entry prompt inside menuNavigate is cancelled).
+    menuNavigate('staffPicker', {shopId}, ()=>{ endShopPresence(); S.staffId = null; S.staffName = null; });
   } else if(ADMIN_SESSION){
     menuNavigate('ownerDash', {dashShop: shopId});
   } else {

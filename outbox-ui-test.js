@@ -945,6 +945,101 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  // ===========================================================================
+  console.log('\n== 22. Session teardown: "change name" survives, reaching admin login tears down the stale channel and S.shopId ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      REALTIME_CHANNELS = {};
+      window.__removeChannelCalls = 0;
+      // Stands in for the real Supabase client - the render-gating logic
+      // under test doesn't depend on what this actually fetches, same
+      // technique as the admin-login mid-flight test.
+      sb = {
+        channel: () => {
+          const chain = { on: (ev, filt, cb) => { window.__bumpCallback = cb; return chain; }, subscribe: () => chain };
+          return chain;
+        },
+        removeChannel: () => { window.__removeChannelCalls++; }
+      };
+      window.refreshShopData = (id) => Promise.resolve(SHOP_CACHE[id] || emptyShopData());
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Tanatswa' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [], expenses: [] };
+      subscribeToShop('harare');
+      render();
+    });
+    check('realtime channel exists after a normal staff login', (await page.evaluate(() => !!REALTIME_CHANNELS['harare'])));
+
+    // "Not X? Change name" - same shop, a new PIN is still expected next.
+    // The exact inline behaviour of that button, not a helper function - it
+    // has none today.
+    await page.evaluate(() => { S.staffName = null; S.staffId = null; navTo('staffPicker'); });
+    check('landed on staffPicker for the same shop', (await page.evaluate(() => S.view)) === 'staffPicker');
+    check('the channel is NOT torn down while staffPicker still needs S.shopId', (await page.evaluate(() => !!REALTIME_CHANNELS['harare'])));
+    check('S.shopId is preserved for staffPicker to use', (await page.evaluate(() => S.shopId)) === 'harare');
+
+    // Abandon the picker without completing a new PIN - reach admin login instead.
+    await page.evaluate(() => { menuNavigate('adminLogin'); });
+    await page.waitForTimeout(50);
+    check('landed on adminLogin', (await page.evaluate(() => S.view)) === 'adminLogin');
+    check('S.shopId cleared on reaching admin login', (await page.evaluate(() => S.shopId)) === null);
+    check('the stale channel was removed from REALTIME_CHANNELS', (await page.evaluate(() => !REALTIME_CHANNELS['harare'])));
+    check('sb.removeChannel was actually called, not just forgotten from the map', (await page.evaluate(() => window.__removeChannelCalls)) === 1);
+
+    // The actual reported symptom: type into the form, move focus away (the
+    // real gap - bump()'s own activeElement guard already protects the
+    // field currently focused; the reported bug happens in the pause
+    // between fields, or before either is focused at all), then fire the
+    // STALE captured realtime callback directly (simulating another device
+    // still writing to harare) and confirm it can no longer wipe the form.
+    await page.fill('#adminEmail', 'owner@towdah.com');
+    await page.evaluate(() => document.getElementById('adminEmail').blur());
+    await page.evaluate(() => {
+      window.__renderCalls = 0;
+      window.__realRender = window.render;
+      window.render = function () { window.__renderCalls++; return window.__realRender(); };
+    });
+    await page.evaluate(() => { if (window.__bumpCallback) window.__bumpCallback(); });
+    await page.waitForTimeout(200);
+    check('the stale bump callback no longer triggers a render (its own S.shopId===shopId gate now fails)', (await page.evaluate(() => window.__renderCalls)) === 0);
+    check('the typed email survives - this is the actual symptom that made a refresh necessary', (await page.evaluate(() => document.getElementById('adminEmail').value)) === 'owner@towdah.com');
+
+    await page.close();
+  }
+
+  // ===========================================================================
+  console.log('\n== 23. Session teardown: switching shops while signed in tears down the OLD shop\'s channel immediately ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      REALTIME_CHANNELS = {};
+      window.__removeChannelCalls = 0;
+      sb = {
+        channel: () => { const chain = { on: () => chain, subscribe: () => chain }; return chain; },
+        removeChannel: () => { window.__removeChannelCalls++; }
+      };
+      window.refreshShopData = (id) => Promise.resolve(SHOP_CACHE[id] || emptyShopData());
+      SHOPS = [
+        { id: 'harare', name: 'Harare CBD', active: true, sortOrder: 1 },
+        { id: 'bulawayo1', name: 'Bulawayo Shop 1', active: true, sortOrder: 2 }
+      ];
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Tanatswa' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [], expenses: [] };
+      SHOP_CACHE['bulawayo1'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [], ledger: [], expenses: [] };
+      subscribeToShop('harare');
+    });
+    check('harare channel exists before switching', (await page.evaluate(() => !!REALTIME_CHANNELS['harare'])));
+
+    await page.evaluate(() => { menuTapShop('bulawayo1'); });
+    await page.waitForTimeout(50);
+
+    check('S.shopId is now the new shop', (await page.evaluate(() => S.shopId)) === 'bulawayo1');
+    check('the OLD shop\'s channel was torn down at the moment of switching - render()\'s own invariant could never see it once S.shopId changed', (await page.evaluate(() => !REALTIME_CHANNELS['harare'])));
+    check('sb.removeChannel was actually called', (await page.evaluate(() => window.__removeChannelCalls)) === 1);
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);
