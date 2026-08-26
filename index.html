@@ -471,12 +471,12 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&am
 // the code path that gets a definite reply (success or a real error) calls
 // unlockBtn - a hung request with no reply at all just leaves the button
 // locked, which is deliberate, not a bug to fix later.
-function lockBtnSaving(id){
+function lockBtnSaving(id, label){
   const btn = document.getElementById(id);
   if(!btn) return null;
   const original = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Saving…';
+  btn.textContent = label || 'Saving…';
   return original;
 }
 function unlockBtn(id, originalLabel){
@@ -492,6 +492,31 @@ function unlockBtn(id, originalLabel){
 // or pretending a save worked when it didn't.
 let SB_UNREACHABLE = false;
 let SAVE_ERROR = null;
+// Set true for the duration of an async login flow (admin email/password,
+// staff PIN) and each of the six staff action handlers (sell, return,
+// receive, open day, close day, submit EOD) - all of them read something
+// once (a form value, an idempotency key) before their first await, then
+// spend real network time with nothing backing that value in state. A
+// background render() firing in that window (an outbox entry resolving, a
+// realtime postgres_changes event, the 15s poll timer) would wipe the live
+// screen out from under the in-flight request, even though the request
+// itself keeps running on its already-captured local variables. Checked by
+// refreshOutboxUI(), subscribeToShop's bump(), and pollTick() - the three
+// background render triggers.
+let CRITICAL_FLOW_IN_PROGRESS = false;
+// A render suppressed by the flag above is DROPPED, not deferred: nothing
+// re-checks it once the flag clears. bump()/pollTick() still refresh
+// SHOP_CACHE in the background even while suppressed, so the data isn't
+// lost - only the screen showing it is stale until something else happens
+// to render again. This flag records "a render was owed" so each critical
+// flow's own finally can pay it off exactly once. Cleared by render() and
+// showSuccessThen() (a real screen redraw happened) and by each handler's
+// own partial DOM patch on a graceful failure (the operation's outcome was
+// already shown) - left set only when none of that ran, i.e. an uncaught
+// throw skipped the handler's own UI code entirely. That's the case this
+// exists for: without it, a thrown error leaves the button stuck on
+// "Saving…" forever, with nothing left to ever redraw the screen.
+let RENDER_PENDING = false;
 function offlineBanner(){
   if(!SB_UNREACHABLE) return '';
   const label = Object.keys(LAST_SYNC_AT).length ? 'Showing the last saved copy from this device.' : 'No saved copy on this device yet.';
@@ -846,6 +871,7 @@ function outboxNeedsAttentionBanner(){
 // background render() would otherwise wipe out whatever they're mid-typing,
 // since screen markup is rebuilt from scratch on every render().
 function refreshOutboxUI(){
+  if(CRITICAL_FLOW_IN_PROGRESS){ RENDER_PENDING = true; return; }
   const ae = document.activeElement;
   if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName) >= 0) return;
   if(document.getElementById('app')) render();
@@ -962,7 +988,12 @@ let REALTIME_CHANNELS = {};
 function subscribeToShop(shopId){
   if(!sb || typeof sb.channel !== 'function' || REALTIME_CHANNELS[shopId]) return;
   try{
-    const bump = () => refreshShopData(shopId).then(()=>{ if(S.shopId===shopId || S.mgmtShop===shopId) render(); });
+    const bump = () => refreshShopData(shopId).then(()=>{
+      if(CRITICAL_FLOW_IN_PROGRESS){ RENDER_PENDING = true; return; }
+      const ae = document.activeElement;
+      if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName) >= 0) return;
+      if(S.shopId===shopId || S.mgmtShop===shopId) render();
+    });
     const ch = sb.channel('shop-'+shopId+(ADMIN_SESSION?'-admin':'-staff'))
       .on('postgres_changes', {event:'*', schema:'public', table:'phones', filter:'shop_id=eq.'+shopId}, bump)
       .on('postgres_changes', {event:'*', schema:'public', table:'daily_logs', filter:'shop_id=eq.'+shopId}, bump)
@@ -1101,7 +1132,13 @@ async function pollTick(force){
     if(JSON.stringify(SHOP_CACHE[id]) !== before) changed = true;
   }
   LAST_SYNC = new Date();
-  if(changed || force) render();
+  // staffMenu (open/close day live here) is a LIVE_VIEW, so this timer can
+  // otherwise fire mid-flight for those two actions the same way the outbox
+  // bar and realtime bump() can - same flag, same reason.
+  if(changed || force){
+    if(CRITICAL_FLOW_IN_PROGRESS) RENDER_PENDING = true;
+    else render();
+  }
 }
 function syncLabel(){
   return LAST_SYNC ? 'Updated ' + LAST_SYNC.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : 'Live';
@@ -1114,6 +1151,7 @@ function refreshRow(){
 }
 
 function render(){
+  RENDER_PENDING = false;
   const app = document.getElementById('app');
   // Nobody should be half-admin, half-staff. Checked on every render rather
   // than at each place staffId can get set, so it can't be missed by a call
@@ -1485,17 +1523,22 @@ function screenStaffPinEntry(){
       <input type="tel" inputmode="numeric" id="pinInput" maxlength="8" placeholder="- - - -" style="letter-spacing:8px;font-size:24px;text-align:center;" autofocus>
     </div>
     <div id="pinErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="submitStaffPin()">Continue</button>
+    <button class="btn btn-primary btn-full-center" id="staffPinBtn" onclick="submitStaffPin()">Continue</button>
   </div>`;
 }
 async function submitStaffPin(){
   const val = document.getElementById('pinInput').value.trim();
   if(!val){ document.getElementById('pinErr').innerHTML = '<div class="err">Enter your PIN.</div>'; return; }
   if(!sb){ document.getElementById('pinErr').innerHTML = "<div class=\"err\">Can't reach the shared database right now. Check your internet and try again.</div>"; return; }
+  const label = lockBtnSaving('staffPinBtn', 'Checking PIN…');
+  CRITICAL_FLOW_IN_PROGRESS = true;
   try{
     const { data, error } = await sb.rpc('staff_login', {p_staff_id: S.pendingStaffId, p_pin: val});
     if(error) throw error;
     if(!data || data.length===0){
+      // Trade-off: clears without rendering - safe only because this PIN
+      // screen shows no live SHOP_CACHE data. Revisit if that changes.
+      RENDER_PENDING = false;
       document.getElementById('pinErr').innerHTML = '<div class="err">That PIN is not correct.</div>';
       return;
     }
@@ -1504,7 +1547,18 @@ async function submitStaffPin(){
     await loadShopData(S.shopId);
     navTo('staffMenu');
   }catch(e){
+    // Same trade-off as above.
+    RENDER_PENDING = false;
     document.getElementById('pinErr').innerHTML = "<div class=\"err\">Could not check your PIN. Check your internet and try again.</div>";
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    unlockBtn('staffPinBtn', label);
+    // Whatever background trigger was suppressed while this flow was in
+    // progress needs a render before this screen is trusted again - the
+    // catch above already covers a thrown error, but this also catches
+    // anything that slips past it (a throw from within the catch itself,
+    // or from loadShopData after a successful login).
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
 }
 
@@ -1562,37 +1616,55 @@ async function closeBizDayAction(){
   if(!ok) return;
   const date = todayStr();
   const label = lockBtnSaving('closeDayBtn');
-  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: closeDayIdemKey};
-  const res = await callRpc('staff_close_day', params);
-  if(res.ok){
-    closeDayIdemKey = null;
-    await refreshShopData(S.shopId);
-  } else {
-    if(res.noReply){
-      enqueueOutbox({ rpcName: 'staff_close_day', params, localDate: date, label: `Close day - ${date} (${shopName(S.shopId)})` });
-      // Fresh key, not null - a later manual close attempt (immediate
-      // re-tap or after reopening) must never collide with what's now
-      // queued under the old one.
-      closeDayIdemKey = genUuid();
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: closeDayIdemKey};
+    const res = await callRpc('staff_close_day', params);
+    if(res.ok){
+      closeDayIdemKey = null;
+      await refreshShopData(S.shopId);
+    } else {
+      if(res.noReply){
+        enqueueOutbox({ rpcName: 'staff_close_day', params, localDate: date, label: `Close day - ${date} (${shopName(S.shopId)})` });
+        // Fresh key, not null - a later manual close attempt (immediate
+        // re-tap or after reopening) must never collide with what's now
+        // queued under the old one.
+        closeDayIdemKey = genUuid();
+      }
+      unlockBtn('closeDayBtn', label);
     }
-    unlockBtn('closeDayBtn', label);
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    // The trailing render() below never runs if the try block above threw -
+    // an uncaught exception skips straight past it, out of the function.
+    // This is what actually recovers the screen in that case; on the normal
+    // path it's a harmless redundant render right before the one below.
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
   render();
 }
 async function openBizDayStaffAction(){
   const date = todayStr();
   const label = lockBtnSaving('openDayBtn');
-  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: openDayIdemKey};
-  const res = await callRpc('staff_open_day', params);
-  if(res.ok){
-    openDayIdemKey = null;
-    await refreshShopData(S.shopId);
-  } else {
-    if(res.noReply){
-      enqueueOutbox({ rpcName: 'staff_open_day', params, localDate: date, label: `Open day - ${date} (${shopName(S.shopId)})` });
-      openDayIdemKey = genUuid();
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_idempotency_key: openDayIdemKey};
+    const res = await callRpc('staff_open_day', params);
+    if(res.ok){
+      openDayIdemKey = null;
+      await refreshShopData(S.shopId);
+    } else {
+      if(res.noReply){
+        enqueueOutbox({ rpcName: 'staff_open_day', params, localDate: date, label: `Open day - ${date} (${shopName(S.shopId)})` });
+        openDayIdemKey = genUuid();
+      }
+      unlockBtn('openDayBtn', label);
     }
-    unlockBtn('openDayBtn', label);
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    // Same reasoning as closeBizDayAction's finally - the trailing render()
+    // below never runs if the try block threw.
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
   render();
 }
@@ -1756,23 +1828,35 @@ async function confirmSale(){
   const modelLabel = selectedPhone.model;
   const date = todayStr();
   const label = lockBtnSaving('saleConfirmBtn');
-  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId, p_price: num, p_idempotency_key: saleIdemKey};
-  const res = await callRpc('staff_sell_phone', params);
-  if(!res.ok){
-    if(res.noReply){
-      // No key change here - pickSalePhone() always mints a fresh key
-      // unconditionally for any new sale, so nothing later can ever
-      // collide with what's now queued under this one.
-      enqueueOutbox({ rpcName: 'staff_sell_phone', params, localDate: date, label: `Sale - ${modelLabel} (${shopName(S.shopId)})` });
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId, p_price: num, p_idempotency_key: saleIdemKey};
+    const res = await callRpc('staff_sell_phone', params);
+    if(!res.ok){
+      if(res.noReply){
+        // No key change here - pickSalePhone() always mints a fresh key
+        // unconditionally for any new sale, so nothing later can ever
+        // collide with what's now queued under this one.
+        enqueueOutbox({ rpcName: 'staff_sell_phone', params, localDate: date, label: `Sale - ${modelLabel} (${shopName(S.shopId)})` });
+      }
+      unlockBtn('saleConfirmBtn', label);
+      // Trade-off: clears without rendering - safe only because this screen
+      // shows no live SHOP_CACHE data. Revisit if that changes.
+      RENDER_PENDING = false;
+      document.getElementById('priceErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+      return;
     }
-    unlockBtn('saleConfirmBtn', label);
-    document.getElementById('priceErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
-    return;
+    await refreshShopData(S.shopId);
+    selectedPhone = null;
+    saleIdemKey = null;
+    showSuccessThen('Sale recorded.', 'staffMenu');
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    // Covers a throw that skips both the error branch above and
+    // showSuccessThen() - otherwise nothing would ever redraw this screen
+    // and saleConfirmBtn stays stuck on "Saving…" forever.
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
-  await refreshShopData(S.shopId);
-  selectedPhone = null;
-  saleIdemKey = null;
-  showSuccessThen('Sale recorded.', 'staffMenu');
 }
 
 function screenReturn(){
@@ -1855,24 +1939,33 @@ async function confirmReturn(){
   const modelLabel = selectedPhone.model;
   const date = todayStr();
   const label = lockBtnSaving('returnConfirmBtn');
-  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes, p_idempotency_key: returnIdemKey};
-  const res = await callRpc('staff_return_phone', params);
-  if(!res.ok){
-    if(res.noReply){
-      // Same reasoning as confirmSale - pickReturnPhone() always mints a
-      // fresh key unconditionally, so nothing here needs to change it.
-      enqueueOutbox({ rpcName: 'staff_return_phone', params, localDate: date, label: `Return - ${modelLabel} (${shopName(S.shopId)})` });
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes, p_idempotency_key: returnIdemKey};
+    const res = await callRpc('staff_return_phone', params);
+    if(!res.ok){
+      if(res.noReply){
+        // Same reasoning as confirmSale - pickReturnPhone() always mints a
+        // fresh key unconditionally, so nothing here needs to change it.
+        enqueueOutbox({ rpcName: 'staff_return_phone', params, localDate: date, label: `Return - ${modelLabel} (${shopName(S.shopId)})` });
+      }
+      unlockBtn('returnConfirmBtn', label);
+      // Trade-off: clears without rendering - safe only because this screen
+      // shows no live SHOP_CACHE data. Revisit if that changes.
+      RENDER_PENDING = false;
+      document.getElementById('returnErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+      return;
     }
-    unlockBtn('returnConfirmBtn', label);
-    document.getElementById('returnErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
-    return;
+    await refreshShopData(S.shopId);
+    selectedPhone = null;
+    returnIdemKey = null;
+    S.returnFaultParts = null;
+    S.returnNotes = null;
+    showSuccessThen(isFaulty ? 'Return recorded. Put this phone on the faulty shelf - do not sell it.' : 'Return recorded. Phone is back in stock.', 'staffMenu');
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
-  await refreshShopData(S.shopId);
-  selectedPhone = null;
-  returnIdemKey = null;
-  S.returnFaultParts = null;
-  S.returnNotes = null;
-  showSuccessThen(isFaulty ? 'Return recorded. Put this phone on the faulty shelf - do not sell it.' : 'Return recorded. Phone is back in stock.', 'staffMenu');
 }
 
 function screenReceive(){
@@ -2109,52 +2202,66 @@ async function finishReceiving(){
   const totalPhones = items.reduce((a,it)=>a+it.imeis.length, 0);
   const date = todayStr();
   const label = lockBtnSaving('receiveFinishBtn');
-  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_items: items, p_idempotency_key: S.receiveIdemKey};
-  const res = await callRpc('staff_receive_stock', params);
-  const app = document.getElementById('app');
-  if(!res.ok){
-    let notSavedMsg = 'Nothing in this document was saved. Nothing else here has been lost — go back, fix the item causing the problem, and try again.';
-    if(res.noReply){
-      enqueueOutbox({ rpcName: 'staff_receive_stock', params, localDate: date, label: `Receive stock - ${totalPhones} phone(s) (${shopName(S.shopId)})` });
-      // Fresh key, not null - the document is still intact below (nothing
-      // reset), so a later Finish tap on the SAME or an expanded batch must
-      // never collide with what's now queued under the old one. The OLD key
-      // is remembered separately so the batch-summary screen can tell "this
-      // exact batch is already queued" apart from "a different/expanded one
-      // is about to be sent" - matching only on shop+date would incorrectly
-      // block starting a genuinely new, unrelated batch later the same day.
-      S.receiveQueuedKey = S.receiveIdemKey;
-      S.receiveIdemKey = genUuid();
-      // "Nothing was saved" would be a false claim once this is queued - it
-      // may well end up saved. The document itself and the retry flow below
-      // are unchanged; only this one line's wording changes.
-      notSavedMsg = 'Could not confirm this document was saved. It will keep trying to save automatically. Nothing else here has been lost — you can also go back and try again yourself.';
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_items: items, p_idempotency_key: S.receiveIdemKey};
+    const res = await callRpc('staff_receive_stock', params);
+    const app = document.getElementById('app');
+    if(!res.ok){
+      let notSavedMsg = 'Nothing in this document was saved. Nothing else here has been lost — go back, fix the item causing the problem, and try again.';
+      if(res.noReply){
+        enqueueOutbox({ rpcName: 'staff_receive_stock', params, localDate: date, label: `Receive stock - ${totalPhones} phone(s) (${shopName(S.shopId)})` });
+        // Fresh key, not null - the document is still intact below (nothing
+        // reset), so a later Finish tap on the SAME or an expanded batch must
+        // never collide with what's now queued under the old one. The OLD key
+        // is remembered separately so the batch-summary screen can tell "this
+        // exact batch is already queued" apart from "a different/expanded one
+        // is about to be sent" - matching only on shop+date would incorrectly
+        // block starting a genuinely new, unrelated batch later the same day.
+        S.receiveQueuedKey = S.receiveIdemKey;
+        S.receiveIdemKey = genUuid();
+        // "Nothing was saved" would be a false claim once this is queued - it
+        // may well end up saved. The document itself and the retry flow below
+        // are unchanged; only this one line's wording changes.
+        notSavedMsg = 'Could not confirm this document was saved. It will keep trying to save automatically. Nothing else here has been lost — you can also go back and try again yourself.';
+      }
+      unlockBtn('receiveFinishBtn', label);
+      RENDER_PENDING = false;
+      app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+        ${topbar(shopName(S.shopId), '', true)}
+        <div class="content">
+          <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
+          <p class="lead">${esc(notSavedMsg)}</p>
+          <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to this document</button>
+        </div>`;
+      return;
     }
-    unlockBtn('receiveFinishBtn', label);
+    const totalAdded = res.data;
+    // Reset the document/key right away, before the two awaits below - a
+    // background render firing while those are still pending must see this
+    // batch as already done, not as a live one still worth a Finish tap.
+    S.receiveBatch = {lines:[]};
+    S.receiveIdemKey = null;
+    S.receiveQueuedKey = null;
+    S.receiveLineDraft = null;
+    S.receiveStep = 'lineDetails';
+    await refreshShopData(S.shopId);
+    await loadShopsAndModels(); // picks up any model staff just typed as new
+    RENDER_PENDING = false;
     app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
-      ${topbar(shopName(S.shopId), '', true)}
+      ${topbar(shopName(S.shopId), '', false)}
       <div class="content">
-        <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
-        <p class="lead">${esc(notSavedMsg)}</p>
-        <button class="btn btn-primary btn-full-center" onclick="S.receiveStep='batchSummary';render();">Back to this document</button>
+        <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
+        <button class="btn btn-primary btn-full-center" onclick="go('receive')">Receive more stock</button>
+        <button class="btn btn-outline btn-full-center" onclick="go('staffMenu')">Back to menu</button>
       </div>`;
-    return;
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    // Covers a throw anywhere above (including from refreshShopData or
+    // loadShopsAndModels after a successful RPC) that skips both innerHTML
+    // writes - otherwise nothing would ever redraw this screen.
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
-  const totalAdded = res.data;
-  await refreshShopData(S.shopId);
-  await loadShopsAndModels(); // picks up any model staff just typed as new
-  S.receiveBatch = {lines:[]};
-  S.receiveIdemKey = null;
-  S.receiveQueuedKey = null;
-  S.receiveLineDraft = null;
-  S.receiveStep = 'lineDetails';
-  app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
-    ${topbar(shopName(S.shopId), '', false)}
-    <div class="content">
-      <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
-      <button class="btn btn-primary btn-full-center" onclick="go('receive')">Receive more stock</button>
-      <button class="btn btn-outline btn-full-center" onclick="go('staffMenu')">Back to menu</button>
-    </div>`;
 }
 
 function screenEod(){
@@ -2201,24 +2308,33 @@ async function confirmEod(){
   if(isNaN(cash) || cash<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter the cash collected today.</div>'; return; }
   const today = todayStr();
   const label = lockBtnSaving('eodSubmitBtn');
-  const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: today, p_physical_count: count, p_faulty_count: faulty, p_cash: cash, p_idempotency_key: S.eodIdemKey};
-  const res = await callRpc('staff_submit_eod', params);
-  if(!res.ok){
-    if(res.noReply){
-      enqueueOutbox({ rpcName: 'staff_submit_eod', params, localDate: today, label: `End of day - ${today} (${shopName(S.shopId)})` });
-      // Fresh key, not null - a later resubmission with corrected figures
-      // (or an immediate re-tap) must never collide with what's now queued
-      // under the old one; a stale replay would silently keep the old
-      // numbers instead of recording the correction.
-      S.eodIdemKey = genUuid();
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: today, p_physical_count: count, p_faulty_count: faulty, p_cash: cash, p_idempotency_key: S.eodIdemKey};
+    const res = await callRpc('staff_submit_eod', params);
+    if(!res.ok){
+      if(res.noReply){
+        enqueueOutbox({ rpcName: 'staff_submit_eod', params, localDate: today, label: `End of day - ${today} (${shopName(S.shopId)})` });
+        // Fresh key, not null - a later resubmission with corrected figures
+        // (or an immediate re-tap) must never collide with what's now queued
+        // under the old one; a stale replay would silently keep the old
+        // numbers instead of recording the correction.
+        S.eodIdemKey = genUuid();
+      }
+      unlockBtn('eodSubmitBtn', label);
+      // Trade-off: clears without rendering - safe only because this screen
+      // shows no live SHOP_CACHE data. Revisit if that changes.
+      RENDER_PENDING = false;
+      document.getElementById('eodErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+      return;
     }
-    unlockBtn('eodSubmitBtn', label);
-    document.getElementById('eodErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
-    return;
+    S.eodIdemKey = null;
+    await refreshShopData(S.shopId);
+    showSuccessThen('End of day submitted. Thank you!', 'staffMenu');
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
-  S.eodIdemKey = null;
-  await refreshShopData(S.shopId);
-  showSuccessThen('End of day submitted. Thank you!', 'staffMenu');
 }
 
 // Never show a green tick for something that did not save. A false confirmation is
@@ -2231,6 +2347,7 @@ function notSavedBox(what){
     </div>`;
 }
 function showSuccessThen(msg, nextView){
+  RENDER_PENDING = false;
   const app = document.getElementById('app');
   const failed = !!SAVE_ERROR;
   app.innerHTML = offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
@@ -2257,7 +2374,7 @@ function screenAdminLogin(){
       <input type="password" id="adminPass" placeholder="Password">
     </div>
     <div id="adminErr"></div>
-    <button class="btn btn-primary btn-full-center" onclick="submitAdminLogin()">Log in</button>
+    <button class="btn btn-primary btn-full-center" id="adminLoginBtn" onclick="submitAdminLogin()">Log in</button>
   </div>`;
 }
 async function submitAdminLogin(){
@@ -2265,12 +2382,17 @@ async function submitAdminLogin(){
   const pw = document.getElementById('adminPass').value;
   if(!email || !pw){ document.getElementById('adminErr').innerHTML = '<div class="err">Enter your email and password.</div>'; return; }
   if(!sb){ document.getElementById('adminErr').innerHTML = "<div class=\"err\">Can't reach the shared database right now. Check your internet and try again.</div>"; return; }
+  const label = lockBtnSaving('adminLoginBtn', 'Signing in…');
+  CRITICAL_FLOW_IN_PROGRESS = true;
   try{
     const { data, error } = await sb.auth.signInWithPassword({ email, password: pw });
     if(error) throw error;
     const ok = await resolveAdminSession(data.user && data.user.id);
     if(!ok){
       await sb.auth.signOut();
+      // Trade-off: clears without rendering - safe only because this login
+      // screen shows no live SHOP_CACHE data. Revisit if that changes.
+      RENDER_PENDING = false;
       document.getElementById('adminErr').innerHTML = '<div class="err">That login works, but is not set up as an admin. Ask whoever set up the database to add you.</div>';
       return;
     }
@@ -2278,7 +2400,13 @@ async function submitAdminLogin(){
     S.dashShop = 'all';
     navTo('ownerDash');
   } catch(e){
+    // Same trade-off as above.
+    RENDER_PENDING = false;
     document.getElementById('adminErr').innerHTML = '<div class="err">That email or password is not correct.</div>';
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    unlockBtn('adminLoginBtn', label);
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
 }
 // Looks up whether a signed-in Supabase Auth user is registered as an admin,
