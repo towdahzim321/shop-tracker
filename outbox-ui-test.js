@@ -1125,6 +1125,52 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  // ===========================================================================
+  console.log('\n== 26. Reaching admin login from Home clears the stale staff identity - a login there must not immediately un-succeed ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      REALTIME_CHANNELS = {};
+      S = { view: 'home', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOPS = []; // keeps the post-login Promise.all(SHOPS.map(loadShopData)) trivial, same as section 7
+      sb = {
+        auth: {
+          signInWithPassword: () => Promise.resolve({ data: { user: { id: 'u1' } }, error: null }),
+          signOut: () => Promise.resolve({ error: null })
+        },
+        from: (table) => ({
+          select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { username: 'owner' }, error: null }) }) })
+        }),
+        channel: () => { const chain = { on: () => chain, subscribe: () => chain }; return chain; },
+        removeChannel: () => {}
+      };
+      // Simulates the live channel a real staff session on 'harare' would
+      // still be holding while sitting on Home - the actual leak scenario.
+      subscribeToShop('harare');
+      render();
+    });
+    check('channel exists before reaching admin login', (await page.evaluate(() => !!REALTIME_CHANNELS['harare'])));
+
+    // Real click on Home's "Admin dashboard" button - the actual leak path:
+    // screenHome() shows this button unconditionally, with no session check.
+    await page.locator('button:has-text("Admin dashboard")').click();
+
+    check('landed on adminLogin', (await page.evaluate(() => S.view)) === 'adminLogin');
+    check('S.staffId cleared on reaching admin login', (await page.evaluate(() => S.staffId)) === null);
+    check('S.staffName cleared on reaching admin login', (await page.evaluate(() => S.staffName)) === null);
+    check('the stale channel was torn down', (await page.evaluate(() => !REALTIME_CHANNELS['harare'])));
+
+    await page.fill('#adminEmail', 'owner@towdah.com');
+    await page.fill('#adminPass', 'correcthorse');
+    await page.locator('#adminLoginBtn').click();
+    await page.waitForTimeout(300);
+
+    check('login succeeded and STAYS succeeded - landed on ownerDash', (await page.evaluate(() => S.view)) === 'ownerDash');
+    check('ADMIN_SESSION survives - not immediately cleared by the S.staffId&&ADMIN_SESSION invariant', (await page.evaluate(() => !!ADMIN_SESSION)));
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);

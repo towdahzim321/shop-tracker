@@ -1421,6 +1421,17 @@ function navBack(){
   render();
 }
 function navHome(){ BACK_STACK=[]; go('home'); }
+// Reaching admin login must not carry a staff identity in with it: the
+// render() invariant above (S.staffId && ADMIN_SESSION -> clearAdminSession())
+// would otherwise fire the instant a login here succeeds, undoing it within
+// milliseconds. Clearing here, at the one place staffId/staffName need to
+// end, also satisfies the shop-teardown invariant's own !S.staffId
+// precondition, so it tears down the stale channel too.
+function goAdminLogin(){
+  S.staffId = null;
+  S.staffName = null;
+  navTo('adminLogin');
+}
 
 // ---- Slide-over menu: Home / Shops / Staff, built from the current session ----
 // Kept as its own DOM layer appended to <body>, deliberately outside #app, so
@@ -1560,7 +1571,7 @@ function renderMenuPanel(){
   if(!isStaffSession){
     homeRows.push(isAdminSession
       ? `<div class="menu-row" onclick="menuNavigate('ownerDash',{dashShop:'${esc(S.dashShop||'all')}'})">Admin dashboard</div>`
-      : `<div class="menu-row" onclick="menuNavigate('adminLogin')">Admin dashboard</div>`);
+      : `<div class="menu-row" onclick="menuNavigate('adminLogin', null, ()=>{ S.staffId = null; S.staffName = null; })">Admin dashboard</div>`);
   }
 
   // Closed shops stay off the list entirely for staff/guests (they can't be
@@ -1663,7 +1674,7 @@ function screenHome(){
       Staff entry
       <span class="btn-sub">Log sales, returns, stock received and end of day count</span>
     </button>
-    <button class="btn btn-outline" onclick="navTo('adminLogin')">
+    <button class="btn btn-outline" onclick="goAdminLogin()">
       Admin dashboard
       <span class="btn-sub">Log in to see reports, stock and money across all shops</span>
     </button>
