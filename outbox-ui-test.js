@@ -1040,6 +1040,91 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  // ===========================================================================
+  console.log('\n== 24. loadShopData\'s fire-and-forget render respects CRITICAL_FLOW_IN_PROGRESS and the focus guard ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      REALTIME_CHANNELS = {};
+      sb = { channel: () => { const chain = { on: () => chain, subscribe: () => chain }; return chain; } };
+      S = { view: 'salePrice', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [], expenses: [] };
+      selectedPhone = { id: 'pA', model: 'Galaxy A55', listPrice: 180 };
+      CRITICAL_FLOW_IN_PROGRESS = false;
+      RENDER_PENDING = false;
+      render();
+    });
+    await installRenderCounter(page);
+
+    // Case A: the fetch resolves while a critical flow is mid-flight - must
+    // not render, and must set RENDER_PENDING for that flow's own finally
+    // block to replay once it ends (same treatment as subscribeToShop's bump()).
+    await page.evaluate(() => {
+      window.__resolveRefresh = null;
+      window.refreshShopData = (id) => new Promise((resolve) => { window.__resolveRefresh = resolve; });
+      loadShopData('harare');
+      CRITICAL_FLOW_IN_PROGRESS = true;
+    });
+    await page.evaluate(() => window.__resolveRefresh());
+    await page.waitForTimeout(150);
+    check('no render fired while CRITICAL_FLOW_IN_PROGRESS was true', (await page.evaluate(() => window.__renderCalls)) === 0);
+    check('RENDER_PENDING set instead, for the flow\'s own finally block to replay', (await page.evaluate(() => RENDER_PENDING)) === true);
+
+    await page.evaluate(() => { CRITICAL_FLOW_IN_PROGRESS = false; if (RENDER_PENDING) { RENDER_PENDING = false; render(); } });
+    await page.waitForTimeout(50);
+    check('the deferred render replays exactly once, same as every other guarded trigger', (await page.evaluate(() => window.__renderCalls)) === 1);
+
+    // Case B: no critical flow, but the field the staff is typing into is
+    // focused - same activeElement guard bump() already has. Section 22's
+    // lesson applies here too: .fill() leaves the field focused, so this
+    // first sub-case tests the guard for real; blur first for the second
+    // sub-case to prove a render DOES fire once neither guard applies.
+    await page.evaluate(() => { window.__renderCalls = 0; });
+    await page.fill('#priceInput', '150');
+    await page.evaluate(() => {
+      window.__resolveRefresh = null;
+      window.refreshShopData = (id) => new Promise((resolve) => { window.__resolveRefresh = resolve; });
+      loadShopData('harare');
+    });
+    await page.evaluate(() => window.__resolveRefresh());
+    await page.waitForTimeout(150);
+    check('no render while the field the staff is typing into is focused', (await page.evaluate(() => window.__renderCalls)) === 0);
+
+    await page.evaluate(() => document.getElementById('priceInput').blur());
+    await page.evaluate(() => {
+      window.__resolveRefresh = null;
+      window.refreshShopData = (id) => new Promise((resolve) => { window.__resolveRefresh = resolve; });
+      loadShopData('harare');
+    });
+    await page.evaluate(() => window.__resolveRefresh());
+    await page.waitForTimeout(150);
+    check('render DOES fire once neither guard applies', (await page.evaluate(() => window.__renderCalls)) === 1);
+
+    await page.close();
+  }
+
+  // ===========================================================================
+  console.log('\n== 25. endShopPresence() clears the whole staff identity, not just S.shopId ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      REALTIME_CHANNELS = {};
+      sb = { channel: () => { const chain = { on: () => chain, subscribe: () => chain }; return chain; }, removeChannel: () => {} };
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      subscribeToShop('harare');
+    });
+    check('channel exists before teardown', (await page.evaluate(() => !!REALTIME_CHANNELS['harare'])));
+
+    await page.evaluate(() => { endShopPresence(); });
+
+    check('S.shopId cleared', (await page.evaluate(() => S.shopId)) === null);
+    check('S.staffId cleared', (await page.evaluate(() => S.staffId)) === null);
+    check('S.staffName cleared', (await page.evaluate(() => S.staffName)) === null);
+    check('channel torn down', (await page.evaluate(() => !REALTIME_CHANNELS['harare'])));
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);

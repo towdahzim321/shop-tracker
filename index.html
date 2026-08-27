@@ -1053,7 +1053,10 @@ function subscribeToShop(shopId){
 // freely: realtime is documented above as a snappiness upgrade over the 15s
 // poll fallback, which runs regardless, so dropping it here costs nothing a
 // staff member would notice beyond the same worst-case delay a failed
-// realtime connection already has today.
+// realtime connection already has today. Also clears the rest of the staff
+// identity (staffId/staffName), not just the shop - a session ending is a
+// session ending, not a partial one, and callers shouldn't have to clear
+// the remaining fields themselves.
 function endShopPresence(){
   if(S.shopId && REALTIME_CHANNELS[S.shopId]){
     if(sb && typeof sb.removeChannel === 'function'){
@@ -1062,12 +1065,19 @@ function endShopPresence(){
     delete REALTIME_CHANNELS[S.shopId];
   }
   S.shopId = null;
+  S.staffId = null;
+  S.staffName = null;
 }
 async function loadShopData(shopId){
   if(!SHOP_CACHE[shopId]) hydrateFromCache(shopId);
   subscribeToShop(shopId);
   if(SHOP_CACHE[shopId]){
-    refreshShopData(shopId).then(()=>{ if(S.shopId===shopId || S.mgmtShop===shopId) render(); });
+    refreshShopData(shopId).then(()=>{
+      if(CRITICAL_FLOW_IN_PROGRESS){ RENDER_PENDING = true; return; }
+      const ae = document.activeElement;
+      if(ae && ['INPUT','TEXTAREA','SELECT'].indexOf(ae.tagName) >= 0) return;
+      if(S.shopId===shopId || S.mgmtShop===shopId) render();
+    });
     return SHOP_CACHE[shopId];
   }
   return refreshShopData(shopId);
@@ -1428,7 +1438,10 @@ function menuTapShop(shopId){
     // could never see the OLD one again to clean it up. Has to happen here,
     // inside beforeGo so it only runs once the switch is actually confirmed
     // (not if the unsaved-entry prompt inside menuNavigate is cancelled).
-    menuNavigate('staffPicker', {shopId}, ()=>{ endShopPresence(); S.staffId = null; S.staffName = null; });
+    // endShopPresence() also clears staffId/staffName, which is what keeps
+    // the old staff identity from being carried into the new shop's
+    // staffPicker via go()'s `keep`.
+    menuNavigate('staffPicker', {shopId}, ()=>{ endShopPresence(); });
   } else if(ADMIN_SESSION){
     menuNavigate('ownerDash', {dashShop: shopId});
   } else {
