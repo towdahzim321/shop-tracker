@@ -1483,6 +1483,139 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  console.log('\n== 32. Outbox loss detection: a corrupted main key is caught by the independent sidecar ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [] };
+      render();
+    });
+
+    // Two real entries, queued the normal way - both the main key and the
+    // sidecar get written for real by the actual enqueueOutbox()/saveOutbox().
+    await page.evaluate(() => {
+      enqueueOutbox({ rpcName: 'staff_sell_phone', params: { p_phone_id: 'p1', p_idempotency_key: 'k1' }, localDate: todayStr(), label: 'Sale - Galaxy A55 (Harare CBD)' });
+      enqueueOutbox({ rpcName: 'staff_log_expense', params: { p_idempotency_key: 'k2' }, localDate: todayStr(), label: 'Expense - Fuel $10 (Harare CBD)' });
+    });
+    check('two entries queued for real', (await page.evaluate(() => getOutboxQueue().length)) === 2);
+    const sidecarBefore = await page.evaluate(() => JSON.parse(window.localStorage.getItem(OUTBOX_SIDECAR_KEY)));
+    check('the sidecar independently recorded both labels', sidecarBefore.length === 2);
+
+    // The actual failure mode: the main key comes back corrupted (a
+    // truncated write) while the much smaller, separately-written sidecar
+    // survived intact. Then run exactly what a real reload runs.
+    await page.evaluate(() => { window.localStorage.setItem(OUTBOX_KEY, '{not valid json'); });
+    await page.evaluate(() => { OUTBOX = { queue: [], needsAttention: [] }; loadOutbox(); });
+
+    check('OUTBOX itself is empty after the simulated corruption', (await page.evaluate(() => OUTBOX.queue.length)) === 0);
+    let loss = await page.evaluate(() => getOutboxLoss());
+    check('both missing entries are recorded as lost', loss.length === 2);
+    check('the lost entries name the right work', loss.map(e => e.label).sort().join('|') === ['Expense - Fuel $10 (Harare CBD)', 'Sale - Galaxy A55 (Harare CBD)'].join('|'));
+
+    await page.evaluate(() => render());
+    const bannerCount = await page.locator('.outbox-loss-warning').count();
+    check('the warning banner is in the DOM', bannerCount === 1, 'count=' + bannerCount);
+    const bannerText = bannerCount ? await page.locator('.outbox-loss-warning').innerText() : '';
+    check('the banner names both missing items', /2 queued items went missing/.test(bannerText) && /Galaxy A55/.test(bannerText) && /Fuel \$10/.test(bannerText), bannerText);
+
+    // A further reload with nothing new queued must not lose the
+    // already-recorded warning - it's persisted, not in-memory.
+    await page.evaluate(() => { OUTBOX_LOSS = []; loadOutbox(); });
+    check('the loss record survives a second load, unacknowledged', (await page.evaluate(() => getOutboxLoss().length)) === 2);
+
+    // Real click through the acknowledgment flow, not page.evaluate() - only
+    // attempted if the button actually exists, so a mutation that breaks
+    // detection produces named failures here instead of a click() hanging
+    // on a locator that will never match anything.
+    await page.evaluate(() => render());
+    const ackBtnCount = await page.locator('.outbox-loss-warning button:has-text("I\'ve re-entered these")').count();
+    check('the acknowledgment button is present to click', ackBtnCount === 1, 'count=' + ackBtnCount);
+    if(ackBtnCount){
+      await page.locator('.outbox-loss-warning button:has-text("I\'ve re-entered these")').click();
+      await page.waitForTimeout(150);
+      await page.locator('.modal-overlay .yes, .modal-overlay .yes-safe').click();
+      await page.waitForTimeout(150);
+    }
+
+    check('the loss record clears after acknowledgment', (await page.evaluate(() => getOutboxLoss().length)) === 0);
+    check('the banner is gone from the DOM', (await page.locator('.outbox-loss-warning').count()) === 0);
+    const survivesReload = await page.evaluate(() => { loadOutbox(); return getOutboxLoss().length; });
+    check('acknowledgment persisted - a further load does not resurrect the warning', survivesReload === 0);
+
+    await page.close();
+  }
+
+  console.log('\n== 33. Outbox loss detection: the negative case - a normal reload with nothing lost shows no warning ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [] };
+      render();
+    });
+    await page.evaluate(() => {
+      enqueueOutbox({ rpcName: 'staff_sell_phone', params: { p_phone_id: 'p1', p_idempotency_key: 'k1' }, localDate: todayStr(), label: 'Sale - Galaxy A55 (Harare CBD)' });
+    });
+    // Nothing corrupted this time - a genuine reload with the real data intact.
+    await page.evaluate(() => { OUTBOX = { queue: [], needsAttention: [] }; loadOutbox(); });
+    check('the queued entry survives an uncorrupted load, unchanged', (await page.evaluate(() => getOutboxQueue().length)) === 1);
+    check('no loss is recorded when nothing actually went missing', (await page.evaluate(() => getOutboxLoss().length)) === 0);
+    await page.evaluate(() => render());
+    check('no warning banner rendered', (await page.locator('.outbox-loss-warning').count()) === 0);
+    await page.close();
+  }
+
+  console.log('\n== 34. Outbox loss detection: a sidecar write failure on a SHRINK must not manufacture a false loss warning ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [] };
+      render();
+    });
+
+    // One real entry, both keys written in sync by the real code.
+    await page.evaluate(() => {
+      enqueueOutbox({ rpcName: 'staff_sell_phone', params: { p_phone_id: 'p1', p_idempotency_key: 'k1' }, localDate: todayStr(), label: 'Sale - Galaxy A55 (Harare CBD)' });
+    });
+    check('sidecar in sync before the simulated failure', (await page.evaluate(() => JSON.parse(window.localStorage.getItem(OUTBOX_SIDECAR_KEY)).length)) === 1);
+
+    // Simulate the exact scenario: the entry resolves (sent successfully,
+    // removed from the queue - same effect as attemptSendHead()'s shift()),
+    // the main write succeeds, but the sidecar's OWN write throws this one
+    // time only.
+    await page.evaluate(() => {
+      const realSetItem = window.localStorage.setItem.bind(window.localStorage);
+      window.localStorage.setItem = function (key, value) {
+        if (key === OUTBOX_SIDECAR_KEY) { throw new DOMException('Simulated quota exceeded', 'QuotaExceededError'); }
+        return realSetItem(key, value);
+      };
+      OUTBOX.queue.shift();
+      saveOutbox();
+      window.localStorage.setItem = realSetItem; // failure was one-shot, not chronic
+    });
+
+    check('the main key correctly reflects the resolved (now-empty) queue', (await page.evaluate(() => JSON.parse(window.localStorage.getItem(OUTBOX_KEY)).queue.length)) === 0);
+    check('the sidecar was invalidated, not left stale-and-wrong', (await page.evaluate(() => window.localStorage.getItem(OUTBOX_SIDECAR_KEY))) === null);
+
+    // What a real reload runs next - this must NOT see the invalidated
+    // sidecar as evidence of loss.
+    await page.evaluate(() => { OUTBOX = { queue: [], needsAttention: [] }; loadOutbox(); });
+    check('no false loss is recorded for the successfully-resolved entry', (await page.evaluate(() => getOutboxLoss().length)) === 0);
+    await page.evaluate(() => render());
+    check('no warning banner rendered for work that actually succeeded', (await page.locator('.outbox-loss-warning').count()) === 0);
+
+    // Confirms the sidecar isn't permanently broken - the next successful
+    // write repopulates it normally.
+    await page.evaluate(() => {
+      enqueueOutbox({ rpcName: 'staff_log_expense', params: { p_idempotency_key: 'k2' }, localDate: todayStr(), label: 'Expense - Fuel $10 (Harare CBD)' });
+    });
+    check('the sidecar recovers on the next successful write', (await page.evaluate(() => JSON.parse(window.localStorage.getItem(OUTBOX_SIDECAR_KEY)).length)) === 1);
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);

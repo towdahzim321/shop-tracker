@@ -281,6 +281,11 @@
   .outbox-bar-item{padding:8px 0;border-top:1px solid rgba(122,78,10,0.15);}
   .outbox-bar-time{font-weight:400;opacity:0.8;margin-top:2px;}
   .outbox-bar .btn{margin:0 14px 12px;width:calc(100% - 28px);}
+  .outbox-loss-warning{background:#8E2B25;color:#fff;font-size:12.5px;font-weight:600;line-height:1.45;padding:11px 14px;border-bottom:3px solid #5C1B17;}
+  .outbox-loss-head{margin-bottom:8px;}
+  .outbox-loss-item{background:rgba(255,255,255,0.14);border-radius:8px;padding:10px;margin-bottom:8px;font-weight:400;}
+  .outbox-loss-item:last-child{margin-bottom:8px;}
+  .outbox-loss-warning .btn-full-center{background:rgba(255,255,255,0.22);border:none;color:#fff;}
   .outbox-attention{background:var(--red);color:#fff;font-size:12.5px;font-weight:600;line-height:1.45;padding:11px 14px;}
   .outbox-attention-head{margin-bottom:8px;}
   .outbox-attention-item{background:rgba(255,255,255,0.14);border-radius:8px;padding:10px;margin-bottom:8px;}
@@ -707,6 +712,22 @@ async function callRpc(name, params){
 // when the original attempt was made is baked into params before it ever
 // reaches enqueueOutbox(), and every retry resends that exact object.
 const OUTBOX_KEY = 'twoutbox_v1';
+// A small, independently-written shadow of the queue - label+queuedAt only,
+// never full params - so loadOutbox() can tell "nothing was ever queued"
+// apart from "queued work vanished". Written as its own try/catch, separate
+// from the (much larger) main write below, specifically so a quota failure
+// on the big blob doesn't also take out the one thing that could prove it
+// used to hold more. Can't catch a full site-data wipe (both keys go
+// together) or total device loss - only storage-layer corruption/truncation
+// and future code bugs that clear OUTBOX without knowing this exists.
+const OUTBOX_SIDECAR_KEY = 'twoutboxsidecar_v1';
+// Persisted, not just in-memory: the detected-loss record has to survive
+// past the very next reload too, or a staff member who doesn't see it on
+// the first screen (glance, screen off) loses it for good. Cleared only by
+// an explicit staff acknowledgment (acknowledgeOutboxLoss()), never by time
+// or by a further reload.
+const OUTBOX_LOSS_KEY = 'twoutboxloss_v1';
+let OUTBOX_LOSS = [];
 const OUTBOX_BACKOFF_SCHEDULE = [5000, 15000, 30000, 60000]; // then steady 60000
 // "Stalled" after more than 30-60 min of REAL attempt time, not wall-clock
 // time since queued - a phone asleep for hours must not silently burn
@@ -730,10 +751,72 @@ function loadOutbox(){
       OUTBOX = { queue: parsed.queue || [], needsAttention: parsed.needsAttention || [] };
     }
   }catch(e){ /* start with an empty outbox rather than block boot */ }
+  detectOutboxLoss();
+}
+function outboxSidecarSnapshot(){
+  return OUTBOX.queue.concat(OUTBOX.needsAttention).map(e => ({ label: e.label, queuedAt: e.queuedAt }));
 }
 function saveOutbox(){
   try{ window.localStorage.setItem(OUTBOX_KEY, JSON.stringify(OUTBOX)); }
   catch(e){ /* storage full/blocked - queue still works in-memory this session */ }
+  // Own try/catch, not folded into the one above - this write must still
+  // get a chance to succeed even when the bigger one just failed.
+  try{ window.localStorage.setItem(OUTBOX_SIDECAR_KEY, JSON.stringify(outboxSidecarSnapshot())); }
+  catch(e){
+    // A stale sidecar is only safe if it UNDER-reports (missing something
+    // real just looks like nothing to check). If this write failed on a
+    // shrink - an entry resolved and got removed, main write succeeded,
+    // this one didn't - the old value left sitting here would OVER-report:
+    // it'd still list something that just succeeded, and the next load
+    // would raise a false "this was lost" warning for work that's fine.
+    // Invalidating instead of leaving it stale trades away detection until
+    // the next successful write, in exchange for never manufacturing a
+    // false alarm - a missed detection is silent (the original problem);
+    // a false one actively tells staff to re-enter something that already
+    // landed.
+    try{ window.localStorage.removeItem(OUTBOX_SIDECAR_KEY); }catch(e2){}
+  }
+}
+// Compares what the sidecar expected against what actually loaded. Anything
+// in the sidecar with no matching (label, queuedAt) pair in the freshly-
+// loaded queue+needsAttention is presumed lost - merged into the persisted
+// loss record (never overwritten while unacknowledged, so a second loss
+// before the first is handled doesn't erase it), then the sidecar is
+// re-synced to current reality either way so it stays accurate going
+// forward. Matching on (label, queuedAt) rather than id: cheap, and two
+// entries queued in the same millisecond with the same label isn't a case
+// this app produces - one staff device, one action at a time.
+function detectOutboxLoss(){
+  let sidecar = [];
+  try{
+    const raw = window.localStorage.getItem(OUTBOX_SIDECAR_KEY);
+    if(raw) sidecar = JSON.parse(raw) || [];
+  }catch(e){ sidecar = []; }
+
+  const presentKeys = new Set(outboxSidecarSnapshot().map(e => e.label + '|' + e.queuedAt));
+  const missing = sidecar.filter(e => !presentKeys.has(e.label + '|' + e.queuedAt));
+
+  let existing = [];
+  try{
+    const raw = window.localStorage.getItem(OUTBOX_LOSS_KEY);
+    if(raw) existing = JSON.parse(raw) || [];
+  }catch(e){ existing = []; }
+
+  if(missing.length){
+    const existingKeys = new Set(existing.map(e => e.label + '|' + e.queuedAt));
+    existing = existing.concat(missing.filter(e => !existingKeys.has(e.label + '|' + e.queuedAt)));
+    try{ window.localStorage.setItem(OUTBOX_LOSS_KEY, JSON.stringify(existing)); }catch(e){}
+  }
+  OUTBOX_LOSS = existing;
+  saveOutbox(); // re-syncs the sidecar to current reality either way
+}
+function getOutboxLoss(){ return OUTBOX_LOSS.slice(); }
+async function acknowledgeOutboxLoss(){
+  const ok = await askConfirm('Confirm you have manually re-entered every item listed above into today\'s records. This cannot be undone.', "Yes, I've handled this", false);
+  if(!ok) return;
+  OUTBOX_LOSS = [];
+  try{ window.localStorage.removeItem(OUTBOX_LOSS_KEY); }catch(e){}
+  render();
 }
 
 function enqueueOutbox({rpcName, params, localDate, label}){
@@ -906,6 +989,18 @@ function staleVersionBanner(){
   return `<div class="stale-version-strip">
     <span>A new version of this app is available. It's safe to keep working - reload when you get a moment.</span>
     <button onclick="location.reload()">Reload now</button>
+  </div>`;
+}
+// Not dismissable by a plain close button on purpose - only
+// acknowledgeOutboxLoss() (its own confirm dialog) clears it, so staff can't
+// tap it away by accident before actually re-entering the lost work.
+function outboxLossWarning(){
+  const items = getOutboxLoss();
+  if(items.length === 0) return '';
+  return `<div class="outbox-loss-warning">
+    <div class="outbox-loss-head">${items.length} queued ${items.length===1?'item':'items'} went missing from this device before ${items.length===1?'it was':'they were'} sent - re-enter ${items.length===1?'it':'them'} by hand.</div>
+    ${items.map(e => `<div class="outbox-loss-item">${esc(e.label)} &middot; was queued ${esc(outboxAgo(e.queuedAt))}</div>`).join('')}
+    <button class="btn btn-full-center" onclick="acknowledgeOutboxLoss()">I've re-entered these</button>
   </div>`;
 }
 function outboxNeedsAttentionBanner(){
@@ -1356,7 +1451,7 @@ function render(){
     endShopPresence();
   }
   try{
-    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -2540,7 +2635,7 @@ async function finishReceiving(){
       }
       unlockBtn('receiveFinishBtn', label);
       RENDER_PENDING = false;
-      app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+      app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
         ${topbar(shopName(S.shopId), '', true)}
         <div class="content">
           <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
@@ -2561,7 +2656,7 @@ async function finishReceiving(){
     await refreshShopData(S.shopId);
     await loadShopsAndModels(); // picks up any model staff just typed as new
     RENDER_PENDING = false;
-    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
       ${topbar(shopName(S.shopId), '', false)}
       <div class="content">
         <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
@@ -2690,7 +2785,7 @@ function showSuccessThen(msg, nextView){
   RENDER_PENDING = false;
   const app = document.getElementById('app');
   const failed = !!SAVE_ERROR;
-  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
       ${failed ? notSavedBox('That entry') : `<div class="success-box">
@@ -4142,7 +4237,7 @@ async function saveSettings(){
 }
 function showSuccessThenGeneric(msg, nextView){
   const app = document.getElementById('app');
-  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar('Admin dashboard','',false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${esc(msg)}</div></div>
