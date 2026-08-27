@@ -1248,7 +1248,16 @@ async function fetchAppEtag(){
     res = await fetch('/index.html', { method:'HEAD', cache:'no-store' });
   }catch(e){ return null; } // no reply - not evidence of anything, same as the outbox's own noReply handling
   if(!res || !res.ok) return null; // a bad status isn't a stale-version signal either
-  return res.headers.get('etag') || null; // can't compare without one - stay silent rather than guess
+  const etag = res.headers.get('etag');
+  if(!etag) return null; // can't compare without one - stay silent rather than guess
+  // Strip a leading weak-validator "W/" before it's ever stored or compared.
+  // Accept-Encoding is fixed per browser, but the response encoding a given
+  // request actually gets isn't guaranteed to be - on a cache miss Vercel can
+  // serve an uncompressed (strong-tagged) response to a request that
+  // normally gets brotli (weak-tagged), even though the underlying content
+  // hash is identical either way. Without normalizing, that single miss
+  // would look like a version change and raise a false stale banner.
+  return etag.replace(/^W\//, '');
 }
 // The only function allowed to set APP_ETAG. Retries every 15s, up to
 // BASELINE_RETRY_LIMIT times, instead of leaving it to whichever call

@@ -25,6 +25,39 @@ async function newPage(browser) {
   return page;
 }
 
+// Version-check sections (27-29) assert EXACT render() call counts across a
+// tight sequence of steps. newPage()'s real sb client - even with its HTTP
+// calls network-blocked at the route level - can take an unpredictable
+// amount of real wall-clock time to actually settle init()'s
+// loadSettings()/loadShopsAndModels() awaits (observed anywhere from
+// instant to ~90s later in this environment), and init()'s own trailing
+// render() call can land in the middle of these sections' assertions,
+// corrupting the count with an extra render nothing in the test caused.
+// Use the app's own window.__SB_OVERRIDE__ test hook (see index.html's
+// init()) instead of the real client, so init() never touches the network
+// at all and its render() always fires immediately at boot - safely before
+// this section's own render-counting begins.
+async function newPageNoNetwork(browser) {
+  const page = await browser.newPage();
+  page.on('pageerror', e => console.log('  PAGEERROR:', e.message));
+  await page.addInitScript(() => {
+    const resolved = { data: [], error: null };
+    const builder = {
+      select: () => builder, order: () => builder, eq: () => builder,
+      single: () => builder, update: () => builder, insert: () => builder,
+      then: (resolve) => resolve(resolved),
+    };
+    window.__SB_OVERRIDE__ = { from: () => builder };
+  });
+  await page.goto(FILE);
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    window.__mockResults = [{ ok: false, error: 'no reply', noReply: true }];
+    window.callRpc = function () { return Promise.resolve(window.__mockResults[0]); };
+  });
+  return page;
+}
+
 // Controllable-delay callRpc: hangs until the test calls
 // window.__resolveRpc(...), so the test can inspect state at the exact
 // moment an RPC is "in flight" and resolve it whenever it chooses.
@@ -1215,7 +1248,7 @@ async function installRealtimeBumpCapture(page, shopId) {
 
   console.log('\n== 27. establishBaseline() owns the tab baseline; a failed attempt reschedules, never fabricates one ==');
   {
-    const page = await newPage(browser);
+    const page = await newPageNoNetwork(browser);
     await page.evaluate(() => { S = { view: 'home' }; });
     await installControllableTimers(page);
     await installMockFetch(page);
@@ -1259,7 +1292,7 @@ async function installRealtimeBumpCapture(page, shopId) {
 
   console.log('\n== 28. checkAppVersion() only compares against an established baseline ==');
   {
-    const page = await newPage(browser);
+    const page = await newPageNoNetwork(browser);
     await page.evaluate(() => { S = { view: 'home' }; });
     await installControllableTimers(page);
     await installMockFetch(page);
@@ -1308,6 +1341,25 @@ async function installRealtimeBumpCapture(page, shopId) {
     check('the stale-version banner is now in the DOM', (await page.locator('.stale-version-strip').count()) === 1);
     check('the Reload now button is present', (await page.locator('.stale-version-strip button:has-text("Reload now")').count()) === 1);
 
+    // Weak/strong ETag normalization: Accept-Encoding is fixed per browser,
+    // but the response encoding a given request actually gets isn't - a
+    // cache miss can serve a differently-encoded (and thus differently
+    // validator-strength) response for content that hasn't changed at all.
+    // W/"x" against the strong baseline "x" (fetchAppEtag strips the W/
+    // before either value is ever stored or compared) must not flag stale;
+    // two weak tags for genuinely different content still must.
+    await page.evaluate(() => { APP_STALE = false; window.__renderCalls = 0; window.__mockEtag = 'W/v1'; });
+    await page.evaluate(() => checkAppVersion());
+    check('W/"x" against the same hash\'s strong baseline does not flag stale', (await page.evaluate(() => APP_STALE)) === false);
+    check('and does not render a banner for it', (await page.evaluate(() => window.__renderCalls)) === 0);
+
+    await page.evaluate(() => { window.__mockEtag = 'W/v2'; });
+    await page.evaluate(() => checkAppVersion());
+    check('W/"x" vs W/"y" - a real change while both are weak - still flags stale', (await page.evaluate(() => APP_STALE)) === true);
+    check('and does render the banner for it', (await page.evaluate(() => window.__renderCalls)) === 1);
+
+    await page.evaluate(() => { APP_STALE = false; window.__renderCalls = 0; });
+
     // The CRITICAL_FLOW_IN_PROGRESS guard - same pattern as pollTick()/loadShopData.
     await page.evaluate(() => {
       APP_STALE = false; RENDER_PENDING = false; window.__renderCalls = 0;
@@ -1327,7 +1379,7 @@ async function installRealtimeBumpCapture(page, shopId) {
 
   console.log('\n== 29. establishBaseline() backs off after repeated failures - a device offline overnight must not poll every 15s forever ==');
   {
-    const page = await newPage(browser);
+    const page = await newPageNoNetwork(browser);
     await page.evaluate(() => { S = { view: 'home' }; });
     await installControllableTimers(page);
     await installMockFetch(page);
