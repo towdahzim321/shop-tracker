@@ -200,12 +200,24 @@
     pointer-events:none;opacity:0;transition:opacity .15s;
   }
   .table-scroll.has-overflow::after{opacity:1;}
-  table.stock-table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;table-layout:auto;}
-  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);white-space:nowrap;}
+  /* Fixed layout so column widths come from the % set on each table's own
+     header cells (see each stock-table's <tr> in the JS below), not from
+     auto-sizing to content - auto-layout was squeezing Model down to fit
+     the numeric columns' nowrap headers, which is backwards: the model
+     name is the information here, a per-shop count or Qty is 1-2 digits. */
+  table.stock-table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;table-layout:fixed;}
+  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);}
   table.stock-table td{padding:8px 4px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;}
   /* Caps long model/colour/storage text (e.g. "Galaxy A55 - Black, 128GB")
-     at 2 lines instead of wrapping to 5-6; the full text is still on the
-     td's title attribute for hover/tap. */
+     at 2 lines instead of wrapping to 5-6; the full text is still on this
+     element's title attribute for hover/tap. Deliberately applied to a
+     <div> wrapping the td's content, never to the td itself: a table cell
+     forces "display:table-cell", which silently overrides the
+     "display:-webkit-box" this clamp technique depends on - the clamp then
+     stops inserting an ellipsis and just hard-clips mid-line, letting a
+     sliver of the next line's text bleed through underneath (confirmed via
+     a phone-width screenshot showing exactly that beneath long model
+     names). A div has no such conflict. */
   .clamp-2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
   table.stock-table tr.total-row td{background:#F0F2F6;font-weight:700;}
   .chip{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;}
@@ -1893,7 +1905,7 @@ function screenStaffDash(){
   });
   const stockKeys = Object.keys(byModel).sort();
   const stockRows = stockKeys.map(k=>`
-    <tr><td class="clamp-2" title="${esc(k)}">${esc(k)}</td><td>${byModel[k]}</td><td>${byModel[k]<=threshold ? '<span class="chip chip-red">Re-up needed</span>' : '<span class="chip chip-green">OK</span>'}</td></tr>
+    <tr><td><div class="clamp-2" title="${esc(k)}">${esc(k)}</div></td><td>${byModel[k]}</td><td>${byModel[k]<=threshold ? '<span class="chip chip-red">Re-up needed</span>' : '<span class="chip chip-green">OK</span>'}</td></tr>
   `).join('');
   const stockTotal = stockKeys.reduce((a,k)=>a+byModel[k],0);
   const lowCount = stockKeys.filter(k=>byModel[k]<=threshold).length;
@@ -1920,7 +1932,7 @@ function screenStaffDash(){
     ${faultyList.length>0 ? `<div class="section-flag">${faultyList.length} phone(s) on the faulty shelf - not for sale.</div>` : ''}
     <h2>Stock levels</h2>
     <div class="card">
-      ${stockRows ? `<div class="table-scroll"><table class="stock-table"><tr><th>Model</th><th>Qty</th><th>Status</th></tr>${stockRows}<tr class="total-row"><td>Total</td><td>${stockTotal}</td><td></td></tr></table></div>` : '<div class="empty">No stock recorded.</div>'}
+      ${stockRows ? `<div class="table-scroll"><table class="stock-table"><tr><th style="width:54%;">Model</th><th style="width:14%;">Qty</th><th>Status</th></tr>${stockRows}<tr class="total-row"><td>Total</td><td>${stockTotal}</td><td></td></tr></table></div>` : '<div class="empty">No stock recorded.</div>'}
     </div>
 
     <h2>Faulty shelf</h2>
@@ -3042,11 +3054,11 @@ function renderStockByModel(data){
     byModel[key].potential += ((p.listPrice||p.costPrice||0) - (p.costPrice||0));
   });
   const rows = Object.keys(byModel).sort().map(m=>`
-    <tr><td class="clamp-2" title="${esc(m)}">${esc(m)}</td><td>${byModel[m].count}</td><td>${money(byModel[m].value)}</td><td>${money(byModel[m].potential)}</td></tr>
+    <tr><td><div class="clamp-2" title="${esc(m)}">${esc(m)}</div></td><td>${byModel[m].count}</td><td>${money(byModel[m].value)}</td><td>${money(byModel[m].potential)}</td></tr>
   `).join('');
   const totals = Object.values(byModel).reduce((a,x)=>({count:a.count+x.count, value:a.value+x.value, potential:a.potential+x.potential}), {count:0,value:0,potential:0});
   return `<div class="table-scroll"><table class="stock-table">
-    <tr><th>Model</th><th>Units</th><th>Cost value</th><th>Exp. profit</th></tr>
+    <tr><th style="width:40%;">Model</th><th style="width:12%;">Units</th><th>Cost value</th><th>Exp. profit</th></tr>
     ${rows}
     <tr class="total-row"><td>Total</td><td>${totals.count}</td><td>${money(totals.value)}</td><td>${money(totals.potential)}</td></tr>
   </table></div>`;
@@ -3067,9 +3079,9 @@ function renderStockByModelAll(allData){
   const shopTotals = SHOPS.map(sh=>keys.reduce((a,k)=>a+(byModel[k].perShop[sh.id]||0),0));
   const grandTotal = keys.reduce((a,k)=>a+byModel[k].total,0);
   return `<div class="table-scroll"><table class="stock-table">
-    <tr><th>Model</th>${SHOPS.map(sh=>`<th>${esc(sh.name.split(' ')[0])}${sh.id==='bulawayo2'?' 2':(sh.id==='bulawayo1'?' 1':'')}</th>`).join('')}<th>Total</th></tr>
+    <tr><th style="width:52%;">Model</th>${SHOPS.map(sh=>`<th>${esc(sh.name.split(' ')[0])}${sh.id==='bulawayo2'?' 2':(sh.id==='bulawayo1'?' 1':'')}</th>`).join('')}<th>Total</th></tr>
     ${keys.map(k=>`<tr>
-      <td class="clamp-2" title="${esc(k)}">${esc(k)} ${byModel[k].total<=threshold?'<span class="chip chip-red">Re-up</span>':''}</td>
+      <td><div class="clamp-2" title="${esc(k)}">${esc(k)}</div>${byModel[k].total<=threshold?'<span class="chip chip-red">Re-up</span>':''}</td>
       ${SHOPS.map(sh=>`<td>${byModel[k].perShop[sh.id]||0}</td>`).join('')}
       <td><strong>${byModel[k].total}</strong></td>
     </tr>`).join('')}
