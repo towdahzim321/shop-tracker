@@ -267,6 +267,14 @@
     background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:8px;
     padding:5px 10px;font-size:12px;font-weight:600;font-family:inherit;flex:0 0 auto;cursor:pointer;
   }
+  .stale-version-strip{
+    background:var(--amber-bg);color:#7A4E0A;padding:11px 14px;font-size:12.5px;font-weight:600;line-height:1.45;
+    display:flex;justify-content:space-between;gap:10px;align-items:flex-start;
+  }
+  .stale-version-strip button{
+    background:rgba(122,78,10,0.15);border:none;color:#7A4E0A;border-radius:8px;
+    padding:5px 10px;font-size:12px;font-weight:600;font-family:inherit;flex:0 0 auto;cursor:pointer;
+  }
   .outbox-bar{background:var(--amber-bg);color:#7A4E0A;font-size:12.5px;font-weight:600;line-height:1.45;}
   .outbox-bar-head{padding:11px 14px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;}
   .outbox-bar-list{padding:0 14px 4px;}
@@ -893,6 +901,13 @@ function retryOutboxEntry(id){
   retryNeedsAttentionEntry(id);
   render();
 }
+function staleVersionBanner(){
+  if(!APP_STALE) return '';
+  return `<div class="stale-version-strip">
+    <span>A new version of this app is available. It's safe to keep working - reload when you get a moment.</span>
+    <button onclick="location.reload()">Reload now</button>
+  </div>`;
+}
 function outboxNeedsAttentionBanner(){
   const items = getOutboxNeedsAttention();
   if(items.length === 0) return '';
@@ -1214,6 +1229,69 @@ function startPolling(){
   if(POLL_TIMER) return;
   POLL_TIMER = setInterval(()=>{ pollTick(); }, 15000);
 }
+// Detects a deploy that happened while this tab was already open - needed
+// before a breaking API change ships (signed staff sessions, Phase 2), so a
+// device left on old JS doesn't just start failing every action with no clue
+// why. Uses Vercel's own ETag on index.html as the fingerprint: content-
+// derived, changes automatically on every deploy, needs no version constant
+// to remember to bump and no second file to keep in sync.
+let APP_ETAG = null;   // this tab's own baseline - null until establishBaseline() sets it; nothing else may
+let APP_STALE = false; // latched true once a real check finds a different ETag; never resets back
+let VERSION_CHECK_TIMER = null;
+let BASELINE_RETRY_TIMER = null;
+let BASELINE_RETRY_COUNT = 0;
+const BASELINE_RETRY_LIMIT = 5;     // fast retries before backing off
+const BASELINE_RETRY_DELAY_MS = 15000;
+async function fetchAppEtag(){
+  let res;
+  try{
+    res = await fetch('/index.html', { method:'HEAD', cache:'no-store' });
+  }catch(e){ return null; } // no reply - not evidence of anything, same as the outbox's own noReply handling
+  if(!res || !res.ok) return null; // a bad status isn't a stale-version signal either
+  return res.headers.get('etag') || null; // can't compare without one - stay silent rather than guess
+}
+// The only function allowed to set APP_ETAG. Retries every 15s, up to
+// BASELINE_RETRY_LIMIT times, instead of leaving it to whichever call
+// happens to succeed first (which could be long after boot, by which point a
+// deploy may have already landed and this tab would baseline against the NEW
+// version forever - see git history for the bug this replaced). Once the
+// fast retries are exhausted - a device that's genuinely offline, not just a
+// blip - it stops scheduling itself rather than polling every 15s all night;
+// pollAppVersion()'s steady-state 5-minute tick and the next 'online' event
+// (which also resets the count, so reconnecting gets a fresh fast burst)
+// pick it back up from there.
+async function establishBaseline(){
+  if(APP_ETAG !== null) return; // already established - a stray call is a no-op
+  const etag = await fetchAppEtag();
+  if(etag){ APP_ETAG = etag; BASELINE_RETRY_TIMER = null; BASELINE_RETRY_COUNT = 0; return; }
+  BASELINE_RETRY_COUNT++;
+  if(BASELINE_RETRY_COUNT >= BASELINE_RETRY_LIMIT){ BASELINE_RETRY_TIMER = null; return; }
+  BASELINE_RETRY_TIMER = setTimeout(establishBaseline, BASELINE_RETRY_DELAY_MS);
+}
+async function checkAppVersion(){
+  if(APP_ETAG === null) return; // no baseline yet - establishBaseline() owns setting one, not this poll
+  const etag = await fetchAppEtag();
+  if(!etag) return; // a failed poll must never move the baseline or flag stale
+  if(etag !== APP_ETAG){
+    APP_STALE = true;
+    if(CRITICAL_FLOW_IN_PROGRESS) RENDER_PENDING = true; else render();
+  }
+}
+// Drives both the steady-state timer and the online event: establishes the
+// baseline if the fast-retry burst above gave up before succeeding,
+// otherwise just compares as normal.
+function pollAppVersion(){
+  if(APP_ETAG === null) establishBaseline(); else checkAppVersion();
+}
+function startVersionCheck(){
+  if(VERSION_CHECK_TIMER) return;
+  establishBaseline();
+  VERSION_CHECK_TIMER = setInterval(pollAppVersion, 5 * 60 * 1000);
+}
+window.addEventListener('online', function(){
+  BASELINE_RETRY_COUNT = 0; // reconnecting deserves a fresh fast burst, not just the slow fallback
+  pollAppVersion();
+});
 async function pollTick(force){
   if(!force){
     if(LIVE_VIEWS.indexOf(S.view) === -1) return;
@@ -1269,7 +1347,7 @@ function render(){
     endShopPresence();
   }
   try{
-    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -2453,7 +2531,7 @@ async function finishReceiving(){
       }
       unlockBtn('receiveFinishBtn', label);
       RENDER_PENDING = false;
-      app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+      app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
         ${topbar(shopName(S.shopId), '', true)}
         <div class="content">
           <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
@@ -2474,7 +2552,7 @@ async function finishReceiving(){
     await refreshShopData(S.shopId);
     await loadShopsAndModels(); // picks up any model staff just typed as new
     RENDER_PENDING = false;
-    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
       ${topbar(shopName(S.shopId), '', false)}
       <div class="content">
         <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
@@ -2586,7 +2664,7 @@ function showSuccessThen(msg, nextView){
   RENDER_PENDING = false;
   const app = document.getElementById('app');
   const failed = !!SAVE_ERROR;
-  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
       ${failed ? notSavedBox('That entry') : `<div class="success-box">
@@ -4038,7 +4116,7 @@ async function saveSettings(){
 }
 function showSuccessThenGeneric(msg, nextView){
   const app = document.getElementById('app');
-  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
     ${topbar('Admin dashboard','',false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${esc(msg)}</div></div>
@@ -4074,6 +4152,7 @@ async function init(){
     await loadShopsAndModels();
     render();
     startPolling();
+    startVersionCheck();
   }catch(e){
     showFatal(e);
   }

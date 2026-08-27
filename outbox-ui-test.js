@@ -1171,6 +1171,197 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  // ===========================================================================
+  // Shared setup for the two version-check sections below: cancels whatever
+  // real establishBaseline() retry is already pending from the actual page
+  // boot (it fired for real, against the real network, before this test ever
+  // touched the page), then replaces setTimeout/clearTimeout with an inert
+  // stand-in the test drives by hand via window.__fireTimer(id) - so retries
+  // are deterministic and never race real wall-clock time.
+  async function installControllableTimers(page) {
+    await page.evaluate(() => {
+      if (typeof BASELINE_RETRY_TIMER !== 'undefined' && BASELINE_RETRY_TIMER) { clearTimeout(BASELINE_RETRY_TIMER); }
+      APP_ETAG = null;
+      APP_STALE = false;
+      BASELINE_RETRY_TIMER = null;
+      BASELINE_RETRY_COUNT = 0;
+      window.__pendingTimers = new Map();
+      window.__nextTimerId = 1;
+      window.setTimeout = function (fn) {
+        const id = window.__nextTimerId++;
+        window.__pendingTimers.set(id, fn);
+        return id;
+      };
+      window.clearTimeout = function (id) { window.__pendingTimers.delete(id); };
+      window.__fireTimer = async function (id) {
+        const fn = window.__pendingTimers.get(id);
+        window.__pendingTimers.delete(id);
+        if (fn) await fn();
+      };
+    });
+  }
+
+  async function installMockFetch(page) {
+    await page.evaluate(() => {
+      window.__mockEtag = 'v1';
+      window.__mockFetchMode = 'ok'; // 'ok' | 'reject' | 'bad-status'
+      window.fetch = (url, opts) => {
+        if (window.__mockFetchMode === 'reject') return Promise.reject(new Error('network down'));
+        if (window.__mockFetchMode === 'bad-status') return Promise.resolve({ ok: false, status: 500, headers: { get: () => null } });
+        return Promise.resolve({ ok: true, status: 200, headers: { get: (k) => (k.toLowerCase() === 'etag' ? window.__mockEtag : null) } });
+      };
+    });
+  }
+
+  console.log('\n== 27. establishBaseline() owns the tab baseline; a failed attempt reschedules, never fabricates one ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => { S = { view: 'home' }; });
+    await installControllableTimers(page);
+    await installMockFetch(page);
+
+    // Boot attempt fails (dropped connection) - must not set a baseline, must schedule a retry.
+    await page.evaluate(() => { window.__mockFetchMode = 'reject'; });
+    await page.evaluate(() => establishBaseline());
+    check('a failed boot attempt leaves APP_ETAG null', (await page.evaluate(() => APP_ETAG)) === null);
+    let pending = await page.evaluate(() => Array.from(window.__pendingTimers.keys()));
+    check('a retry was scheduled after the failed attempt', pending.length === 1);
+    check('BASELINE_RETRY_TIMER records the pending retry', (await page.evaluate(() => BASELINE_RETRY_TIMER)) !== null);
+
+    // Same failure again (still down) - must not pile up a second pending retry.
+    // Fire the pending retry while the network is still down.
+    await page.evaluate((id) => window.__fireTimer(id), pending[0]);
+    check('still null after a second failed attempt', (await page.evaluate(() => APP_ETAG)) === null);
+    pending = await page.evaluate(() => Array.from(window.__pendingTimers.keys()));
+    check('exactly one retry pending, not stacked', pending.length === 1);
+
+    // Network recovers before the deploy that will eventually land - the retry
+    // must capture what the tab is actually running (v1), not wait for the timer.
+    await page.evaluate(() => { window.__mockFetchMode = 'ok'; window.__mockEtag = 'v1'; });
+    await page.evaluate((id) => window.__fireTimer(id), pending[0]);
+    check('the retry establishes the true baseline once it succeeds', (await page.evaluate(() => APP_ETAG)) === 'v1');
+    check('APP_STALE stays false just from establishing a baseline', (await page.evaluate(() => APP_STALE)) === false);
+    pending = await page.evaluate(() => Array.from(window.__pendingTimers.keys()));
+    check('the retry timer is cleared once the baseline is set - no leaked timer', pending.length === 0);
+    check('BASELINE_RETRY_TIMER is cleared too', (await page.evaluate(() => BASELINE_RETRY_TIMER)) === null);
+
+    // A deploy lands after the baseline was already established (etag flips).
+    // A stray call to establishBaseline() (e.g. a late-firing retry that never
+    // got cancelled somewhere) must be a no-op - it does not re-baseline.
+    await page.evaluate(() => { window.__mockEtag = 'v2'; });
+    await page.evaluate(() => establishBaseline());
+    check('establishBaseline() is a no-op once a baseline already exists', (await page.evaluate(() => APP_ETAG)) === 'v1');
+    pending = await page.evaluate(() => Array.from(window.__pendingTimers.keys()));
+    check('and it does not schedule a retry either', pending.length === 0);
+
+    await page.close();
+  }
+
+  console.log('\n== 28. checkAppVersion() only compares against an established baseline ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => { S = { view: 'home' }; });
+    await installControllableTimers(page);
+    await installMockFetch(page);
+    await installRenderCounter(page);
+
+    // No baseline yet - even a real, different-looking ETag must not be treated as stale,
+    // and must not sneak in and establish a baseline either. This is the actual bug this
+    // whole redesign closes: checkAppVersion() used to be the thing that set APP_ETAG.
+    await page.evaluate(() => { window.__mockEtag = 'v2'; });
+    await page.evaluate(() => checkAppVersion());
+    check('checkAppVersion() never sets a baseline itself', (await page.evaluate(() => APP_ETAG)) === null);
+    check('and so cannot flag stale before a baseline exists', (await page.evaluate(() => APP_STALE)) === false);
+
+    // Establish the real baseline the normal way.
+    await page.evaluate(() => { window.__mockEtag = 'v1'; });
+    await page.evaluate(() => establishBaseline());
+    check('baseline established for the rest of this section', (await page.evaluate(() => APP_ETAG)) === 'v1');
+
+    // Negative case: the server keeps serving the SAME version across several
+    // ticks - APP_STALE must stay false the whole time. Without this, a fix
+    // that just sets APP_STALE too eagerly would still pass every check above.
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate(() => checkAppVersion());
+    }
+    check('APP_STALE stays false through 5 ticks of an unchanged ETag', (await page.evaluate(() => APP_STALE)) === false);
+    check('no render fired from any of those ticks', (await page.evaluate(() => window.__renderCalls)) === 0);
+
+    // A failed poll (bad HTTP status) must not move the baseline or flag stale.
+    await page.evaluate(() => { window.__mockFetchMode = 'bad-status'; });
+    await page.evaluate(() => checkAppVersion());
+    check('a bad HTTP status does not flag stale', (await page.evaluate(() => APP_STALE)) === false);
+    check('APP_ETAG unchanged by a failed poll', (await page.evaluate(() => APP_ETAG)) === 'v1');
+
+    // A failed poll (dropped connection) must not move the baseline or flag stale either.
+    await page.evaluate(() => { window.__mockFetchMode = 'reject'; });
+    await page.evaluate(() => checkAppVersion());
+    check('a rejected fetch (no reply) does not flag stale', (await page.evaluate(() => APP_STALE)) === false);
+    check('APP_ETAG still unchanged after the rejected fetch', (await page.evaluate(() => APP_ETAG)) === 'v1');
+    check('neither failed poll triggered a render', (await page.evaluate(() => window.__renderCalls)) === 0);
+
+    // A real reply with a genuinely different ETag - must flag stale and render the banner.
+    await page.evaluate(() => { window.__mockFetchMode = 'ok'; window.__mockEtag = 'v2'; });
+    await page.evaluate(() => checkAppVersion());
+    check('a real ETag change flags stale', (await page.evaluate(() => APP_STALE)) === true);
+    check('a render happened for the new banner', (await page.evaluate(() => window.__renderCalls)) === 1);
+    check('the stale-version banner is now in the DOM', (await page.locator('.stale-version-strip').count()) === 1);
+    check('the Reload now button is present', (await page.locator('.stale-version-strip button:has-text("Reload now")').count()) === 1);
+
+    // The CRITICAL_FLOW_IN_PROGRESS guard - same pattern as pollTick()/loadShopData.
+    await page.evaluate(() => {
+      APP_STALE = false; RENDER_PENDING = false; window.__renderCalls = 0;
+      CRITICAL_FLOW_IN_PROGRESS = true;
+      window.__mockEtag = 'v3';
+    });
+    await page.evaluate(() => checkAppVersion());
+    check('no render fired while CRITICAL_FLOW_IN_PROGRESS was true', (await page.evaluate(() => window.__renderCalls)) === 0);
+    check('RENDER_PENDING set instead', (await page.evaluate(() => RENDER_PENDING)) === true);
+    check('APP_STALE still recorded even though the render was deferred', (await page.evaluate(() => APP_STALE)) === true);
+
+    await page.evaluate(() => { CRITICAL_FLOW_IN_PROGRESS = false; if (RENDER_PENDING) { RENDER_PENDING = false; render(); } });
+    check('the deferred render replays exactly once', (await page.evaluate(() => window.__renderCalls)) === 1);
+
+    await page.close();
+  }
+
+  console.log('\n== 29. establishBaseline() backs off after repeated failures - a device offline overnight must not poll every 15s forever ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => { S = { view: 'home' }; });
+    await installControllableTimers(page);
+    await installMockFetch(page);
+    await page.evaluate(() => { window.__mockFetchMode = 'reject'; });
+
+    const limit = await page.evaluate(() => BASELINE_RETRY_LIMIT);
+    await page.evaluate(() => establishBaseline()); // attempt 1 of `limit`
+    for (let i = 2; i <= limit; i++) {
+      const ids = await page.evaluate(() => Array.from(window.__pendingTimers.keys()));
+      check(`a retry is pending before attempt ${i}`, ids.length === 1);
+      await page.evaluate((id) => window.__fireTimer(id), ids[0]); // attempt i
+    }
+    check('still no baseline after exhausting every fast retry - genuinely offline, not a blip', (await page.evaluate(() => APP_ETAG)) === null);
+    check('the fast-retry chain stopped scheduling itself once the cap was hit', (await page.evaluate(() => Array.from(window.__pendingTimers.keys()).length)) === 0);
+    check('BASELINE_RETRY_TIMER cleared, not left pointing at a dead timer', (await page.evaluate(() => BASELINE_RETRY_TIMER)) === null);
+
+    // Network still down: the steady-state 5-minute tick must get exactly one
+    // attempt, not restart a fresh 15s-interval storm.
+    await page.evaluate(() => pollAppVersion());
+    check('a steady-state tick while still offline does not restart the fast chain', (await page.evaluate(() => Array.from(window.__pendingTimers.keys()).length)) === 0);
+    check('still no baseline after that lone steady-state attempt', (await page.evaluate(() => APP_ETAG)) === null);
+
+    // Connectivity returns - dispatch a REAL 'online' event (not a direct
+    // function call) to exercise the actual production listener, which must
+    // give establishing a baseline a fresh shot rather than waiting up to 5
+    // minutes for the next steady-state tick.
+    await page.evaluate(() => { window.__mockFetchMode = 'ok'; window.__mockEtag = 'v1'; });
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    check('the online event establishes the baseline once connectivity returns', (await page.evaluate(() => APP_ETAG)) === 'v1');
+    check('BASELINE_RETRY_COUNT reset so a future outage gets its own fast burst', (await page.evaluate(() => BASELINE_RETRY_COUNT)) === 0);
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);
