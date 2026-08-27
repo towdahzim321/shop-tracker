@@ -1616,6 +1616,71 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  console.log('\n== 35. outboxAgo() gains day-level granularity past 24h ==');
+  {
+    const page = await newPage(browser);
+    const r = await page.evaluate(() => {
+      const now = Date.now();
+      return {
+        justNow: outboxAgo(now),
+        tenSec: outboxAgo(now - 10 * 1000),
+        fiveMin: outboxAgo(now - 5 * 60 * 1000),
+        oneHour: outboxAgo(now - 60 * 60 * 1000),
+        twentyThreeHours: outboxAgo(now - 23 * 60 * 60 * 1000),
+        exactlyOneDay: outboxAgo(now - 24 * 60 * 60 * 1000),
+        oneDayOneHour: outboxAgo(now - 25 * 60 * 60 * 1000),
+        twoDays: outboxAgo(now - 48 * 60 * 60 * 1000),
+        fiveDays: outboxAgo(now - 5 * 24 * 60 * 60 * 1000),
+      };
+    });
+    check('just now', r.justNow === 'just now');
+    check('10s rounds to just now', r.tenSec === 'just now');
+    check('5 mins ago', r.fiveMin === '5 mins ago');
+    check('1 hour ago (singular)', r.oneHour === '1 hour ago');
+    check('23 hours ago - still hour granularity, not yet a day', r.twentyThreeHours === '23 hours ago', r.twentyThreeHours);
+    check('exactly 24h switches to day granularity, singular', r.exactlyOneDay === '1 day ago', r.exactlyOneDay);
+    check('25h rounds to "1 day ago", not "25 hours ago"', r.oneDayOneHour === '1 day ago', r.oneDayOneHour);
+    check('2 days ago (plural)', r.twoDays === '2 days ago', r.twoDays);
+    check('5 days ago', r.fiveDays === '5 days ago', r.fiveDays);
+    await page.close();
+  }
+
+  console.log('\n== 36. Outbox queue: entries past 24h get a distinct "unusually old" flag, not just a longer number ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'staffMenu', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [{ id: 'p1', model: 'Galaxy A55', description: '', imei: '123456789012345', status: 'in_stock' }], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [] };
+      render();
+    });
+
+    // A normal, recent entry, queued for real.
+    await page.evaluate(() => {
+      enqueueOutbox({ rpcName: 'staff_sell_phone', params: { p_phone_id: 'p1', p_idempotency_key: 'k1' }, localDate: todayStr(), label: 'Sale - Galaxy A55 (Harare CBD)' });
+    });
+    await page.evaluate(() => render());
+    await page.locator('.outbox-bar-head').click();
+    check('a fresh entry shows no stale flag', (await page.locator('.outbox-stale-flag').count()) === 0);
+
+    // Age it past the threshold - simulating real elapsed time, not a 24h wait.
+    // OUTBOX_BAR_EXPANDED is a separate flag from OUTBOX itself, untouched
+    // by this render() - the bar is still expanded from the click above, no
+    // second click needed (one would toggle it back closed).
+    await page.evaluate(() => { OUTBOX.queue[0].queuedAt = Date.now() - (25 * 60 * 60 * 1000); saveOutbox(); render(); });
+    const flagCount = await page.locator('.outbox-stale-flag').count();
+    check('an entry past 24h shows the stale flag in the waiting bar', flagCount === 1, 'count=' + flagCount);
+    const flagText = flagCount ? await page.locator('.outbox-stale-flag').innerText() : '';
+    check('the flag reads as a distinct warning, not just the age number', /unusually long/i.test(flagText), flagText);
+    const timeText = await page.locator('.outbox-bar-time').innerText();
+    check('the age itself now reads in day granularity too', /1 day ago/.test(timeText), timeText);
+
+    // Same signal on the per-screen queued notice.
+    await page.evaluate(() => { selectedPhone = SHOP_CACHE['harare'].inventory[0]; navTo('salePrice'); });
+    check('the stale flag also shows on the per-screen queued notice', (await page.locator('.queued-notice .outbox-stale-flag').count()) === 1);
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);

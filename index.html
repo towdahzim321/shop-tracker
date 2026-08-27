@@ -281,6 +281,10 @@
   .outbox-bar-item{padding:8px 0;border-top:1px solid rgba(122,78,10,0.15);}
   .outbox-bar-time{font-weight:400;opacity:0.8;margin-top:2px;}
   .outbox-bar .btn{margin:0 14px 12px;width:calc(100% - 28px);}
+  .outbox-stale-flag{
+    background:var(--red);color:#fff;font-weight:700;font-size:11.5px;
+    border-radius:6px;padding:5px 8px;margin-top:6px;display:inline-block;
+  }
   .outbox-loss-warning{background:#8E2B25;color:#fff;font-size:12.5px;font-weight:600;line-height:1.45;padding:11px 14px;border-bottom:3px solid #5C1B17;}
   .outbox-loss-head{margin-bottom:8px;}
   .outbox-loss-item{background:rgba(255,255,255,0.14);border-radius:8px;padding:10px;margin-bottom:8px;font-weight:400;}
@@ -935,9 +939,25 @@ function outboxAgo(ts){
   const mins = Math.max(0, Math.round((Date.now()-ts)/60000));
   if(mins < 1) return 'just now';
   if(mins < 60) return mins + (mins===1?' min ago':' mins ago');
-  const hrs = Math.round(mins/60);
-  return hrs + (hrs===1?' hour ago':' hours ago');
+  if(mins < 60*24){
+    const hrs = Math.round(mins/60);
+    return hrs + (hrs===1?' hour ago':' hours ago');
+  }
+  // Computed from mins directly, not from the already-rounded hrs above -
+  // chaining rounds (mins -> hrs -> days) drifts by up to a day at the
+  // boundary; this stays accurate against the real elapsed time.
+  const days = Math.round(mins/(60*24));
+  return days + (days===1?' day ago':' days ago');
 }
+// A day's worth of no resolution, not a shorter number like the 45-minute
+// OUTBOX_STALLED_THRESHOLD_MS - that one just stops unattended background
+// retries; this one is a distinct staff-facing signal that something's off
+// (a device offline a full business cycle, or repeatedly failing for a real
+// reason). Same boundary outboxAgo() switches to day-granularity at, so the
+// unit shown and the "this is unusual" line share one threshold instead of
+// two arbitrary numbers.
+const OUTBOX_UNUSUALLY_OLD_MS = 24 * 60 * 60 * 1000;
+function outboxIsUnusuallyOld(ts){ return (Date.now() - ts) >= OUTBOX_UNUSUALLY_OLD_MS; }
 // What each of the seven staff action screens calls to find whether the
 // action it's about to offer is already sitting in the queue - so it can
 // show a locked "queued" state instead of a normal button. matchParams runs
@@ -949,6 +969,7 @@ function queuedActionNotice(entry){
   return `<div class="queued-notice">
     <div class="lbl">Queued — sending automatically</div>
     <div class="sub">${esc(entry.label)} · waiting ${esc(outboxAgo(entry.queuedAt))}${entry.stalled ? ' · hasn\'t gone through yet, tap "Send now" below' : ''}</div>
+    ${outboxIsUnusuallyOld(entry.queuedAt) ? `<div class="outbox-stale-flag">Unusually long wait - worth checking this device's connection</div>` : ''}
   </div>`;
 }
 
@@ -968,6 +989,7 @@ function outboxWaitingBar(){
         ${queue.map(e => `<div class="outbox-bar-item">
           <div>${esc(e.label)}</div>
           <div class="outbox-bar-time">waiting ${esc(outboxAgo(e.queuedAt))}${e.stalled ? ' · not retrying automatically right now' : ''}</div>
+          ${outboxIsUnusuallyOld(e.queuedAt) ? `<div class="outbox-stale-flag">Unusually long wait - worth checking this device's connection</div>` : ''}
         </div>`).join('')}
       </div>
       <button class="btn btn-outline btn-full-center" onclick="outboxSendNowClicked()">Send now</button>
