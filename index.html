@@ -552,91 +552,6 @@ let CRITICAL_FLOW_IN_PROGRESS = false;
 // exists for: without it, a thrown error leaves the button stuck on
 // "Saving…" forever, with nothing left to ever redraw the screen.
 let RENDER_PENDING = false;
-// ============================================================
-// TEMPORARY DIAGNOSTIC INSTRUMENTATION - added to chase the admin-login
-// blank-on-first-attempt bug on a real phone, where devtools aren't
-// practical. Remove this whole block (and its call sites in render(),
-// submitAdminLogin(), resolveAdminSession(), clearAdminSession()) once
-// the bug is root-caused.
-// ============================================================
-let DIAG_LOG = [];
-let DIAG_PANEL_OPEN = false;
-function diagLog(tag, extra){
-  try{
-    const stack = (new Error()).stack || '';
-    const frames = stack.split('\n').slice(2, 6).map(s => s.trim()).join('  <-  ');
-    const d = new Date();
-    const ts = d.toTimeString().slice(0,8) + '.' + String(d.getMilliseconds()).padStart(3,'0');
-    DIAG_LOG.push({
-      ts, tag, extra: extra || '',
-      staffId: (typeof S !== 'undefined' && S) ? S.staffId : undefined,
-      shopId: (typeof S !== 'undefined' && S) ? S.shopId : undefined,
-      admin: typeof ADMIN_SESSION !== 'undefined' ? !!ADMIN_SESSION : undefined,
-      critical: typeof CRITICAL_FLOW_IN_PROGRESS !== 'undefined' ? !!CRITICAL_FLOW_IN_PROGRESS : undefined,
-      frames
-    });
-    if(DIAG_LOG.length > 300) DIAG_LOG.shift();
-    renderDiagPanel();
-  }catch(e){}
-}
-function diagLogText(){
-  return DIAG_LOG.map(e =>
-    '[' + e.ts + '] ' + e.tag + (e.extra ? ' (' + e.extra + ')' : '') +
-    '  staffId=' + e.staffId + ' shopId=' + e.shopId + ' admin=' + e.admin + ' critical=' + e.critical +
-    '\n    at: ' + e.frames
-  ).join('\n');
-}
-function toggleDiagPanel(){ DIAG_PANEL_OPEN = !DIAG_PANEL_OPEN; renderDiagPanel(); }
-function clearDiagLog(){ DIAG_LOG = []; renderDiagPanel(); }
-function copyDiagLog(){
-  const text = diagLogText();
-  const btn = document.getElementById('diagCopyBtn');
-  const done = (ok) => { if(btn){ btn.textContent = ok ? 'Copied!' : 'Copy failed'; setTimeout(()=>{ if(btn) btn.textContent = 'Copy'; }, 1500); } };
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(()=>done(true), ()=>done(false));
-  } else {
-    try{
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      done(true);
-    }catch(e){ done(false); }
-  }
-}
-function renderDiagPanel(){
-  let el = document.getElementById('diagPanel');
-  if(!el){ el = document.createElement('div'); el.id = 'diagPanel'; document.body.appendChild(el); }
-  if(!DIAG_PANEL_OPEN){
-    el.innerHTML = '<button onclick="toggleDiagPanel()" style="position:fixed;bottom:8px;right:8px;z-index:99999;background:#c0392b;color:#fff;border:none;border-radius:20px;padding:8px 14px;font:12px monospace;box-shadow:0 2px 6px rgba(0,0,0,.4);">DIAG (' + DIAG_LOG.length + ')</button>';
-    return;
-  }
-  const rows = DIAG_LOG.slice(-100).map(e =>
-    '<div style="border-bottom:1px solid #333;padding:3px 0;">' +
-      '<span style="color:#7fd;">[' + esc(e.ts) + ']</span> ' +
-      '<b style="color:#ffb347;">' + esc(e.tag) + '</b>' + (e.extra ? ' <span style="color:#aaa;">(' + esc(String(e.extra)) + ')</span>' : '') +
-      '<br><span style="color:#8f8;">staffId=' + esc(String(e.staffId)) + ' shopId=' + esc(String(e.shopId)) + ' admin=' + esc(String(e.admin)) + ' critical=' + esc(String(e.critical)) + '</span>' +
-      '<br><span style="color:#888;font-size:10px;">' + esc(e.frames) + '</span>' +
-    '</div>'
-  ).reverse().join('');
-  el.innerHTML =
-    '<div style="position:fixed;left:0;right:0;bottom:0;height:55vh;z-index:99999;background:rgba(10,10,10,.97);color:#eee;font:11px/1.4 monospace;display:flex;flex-direction:column;">' +
-      '<div style="display:flex;gap:6px;padding:6px;border-bottom:1px solid #444;flex-shrink:0;">' +
-        '<b style="flex:1;align-self:center;">DIAG LOG (' + DIAG_LOG.length + ')</b>' +
-        '<button id="diagCopyBtn" onclick="copyDiagLog()" style="padding:6px 10px;">Copy</button>' +
-        '<button onclick="clearDiagLog()" style="padding:6px 10px;">Clear</button>' +
-        '<button onclick="toggleDiagPanel()" style="padding:6px 10px;">Close</button>' +
-      '</div>' +
-      '<div style="overflow-y:auto;padding:6px;flex:1;-webkit-overflow-scrolling:touch;">' + (rows || '<i>empty</i>') + '</div>' +
-    '</div>';
-}
-renderDiagPanel();
-// ============================================================
-// END TEMPORARY DIAGNOSTIC INSTRUMENTATION (setup). Call sites are marked
-// "DIAG:" at render(), submitAdminLogin(), resolveAdminSession(), and
-// clearAdminSession().
-// ============================================================
 // A failed supabaseLib load also makes SB_UNREACHABLE true (sb never gets
 // created), so without this check both banners would show at once - and
 // offlineBanner()'s "can't reach the shared database" text would be actively
@@ -1333,7 +1248,6 @@ function refreshRow(){
 }
 
 function render(){
-  diagLog('render() called', 'view=' + S.view); // DIAG
   RENDER_PENDING = false;
   const app = document.getElementById('app');
   // Nobody should be half-admin, half-staff. Checked on every render rather
@@ -2700,11 +2614,10 @@ function screenAdminLogin(){
   </div>`;
 }
 async function submitAdminLogin(){
-  diagLog('submitAdminLogin() ENTRY'); // DIAG
   const email = document.getElementById('adminEmail').value.trim();
   const pw = document.getElementById('adminPass').value;
-  if(!email || !pw){ document.getElementById('adminErr').innerHTML = '<div class="err">Enter your email and password.</div>'; diagLog('submitAdminLogin() EXIT', 'missing email/pw'); return; } // DIAG
-  if(!sb){ document.getElementById('adminErr').innerHTML = "<div class=\"err\">Can't reach the shared database right now. Check your internet and try again.</div>"; diagLog('submitAdminLogin() EXIT', 'no sb'); return; } // DIAG
+  if(!email || !pw){ document.getElementById('adminErr').innerHTML = '<div class="err">Enter your email and password.</div>'; return; }
+  if(!sb){ document.getElementById('adminErr').innerHTML = "<div class=\"err\">Can't reach the shared database right now. Check your internet and try again.</div>"; return; }
   const label = lockBtnSaving('adminLoginBtn', 'Signing in…');
   CRITICAL_FLOW_IN_PROGRESS = true;
   try{
@@ -2717,22 +2630,18 @@ async function submitAdminLogin(){
       // screen shows no live SHOP_CACHE data. Revisit if that changes.
       RENDER_PENDING = false;
       document.getElementById('adminErr').innerHTML = '<div class="err">That login works, but is not set up as an admin. Ask whoever set up the database to add you.</div>';
-      diagLog('submitAdminLogin() EXIT', 'not an admin'); // DIAG
       return;
     }
     await Promise.all(SHOPS.map(s=>loadShopData(s.id)));
     S.dashShop = 'all';
     navTo('ownerDash');
-    diagLog('submitAdminLogin() EXIT', 'success -> ownerDash'); // DIAG
   } catch(e){
     // Same trade-off as above.
     RENDER_PENDING = false;
     document.getElementById('adminErr').innerHTML = '<div class="err">That email or password is not correct.</div>';
-    diagLog('submitAdminLogin() EXIT', 'caught: ' + (e && e.message)); // DIAG
   } finally {
     CRITICAL_FLOW_IN_PROGRESS = false;
     unlockBtn('adminLoginBtn', label);
-    diagLog('submitAdminLogin() FINALLY', 'RENDER_PENDING=' + RENDER_PENDING); // DIAG
     if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
 }
@@ -2746,7 +2655,6 @@ async function resolveAdminSession(userId){
     const { data, error } = await sb.from('admins').select('username').eq('user_id', userId).single();
     if(error || !data) return false;
     ADMIN_SESSION = { userId, username: data.username };
-    diagLog('ADMIN_SESSION SET', data.username); // DIAG
     return true;
   }catch(e){ return false; }
 }
@@ -2756,7 +2664,6 @@ async function resolveAdminSession(userId){
 // the app-level flag, so nothing can silently resurrect it.
 async function clearAdminSession(){
   if(!ADMIN_SESSION) return;
-  diagLog('ADMIN_SESSION CLEARED'); // DIAG
   ADMIN_SESSION = null;
   if(sb) try{ await sb.auth.signOut(); }catch(e){}
 }
