@@ -49,6 +49,18 @@
   through the Supabase dashboard.
 - Always run the file's verification query afterwards and report the 
   actual output, not a summary.
+- On this Windows machine, `psql -f <path>` corrupts a function body that
+  already contains literal `\r` bytes (see the CRLF note below) - it doubles
+  each one into `\r\r\n`, evidently from Windows text-mode translation on the
+  file read. Confirmed by capturing a function's `pg_get_functiondef()`
+  output to a file and replaying it with `-f <path>` vs piping the same file
+  through stdin (`cat file | psql -f -`): the stdin form reproduced the
+  original byte-for-byte (confirmed with `cmp`), the filepath form did not.
+  When byte-exact replay of captured DDL matters (e.g. restoring a function
+  after a mutation test), pipe through stdin, don't pass a filepath to `-f`.
+  Ordinary migration files (plain `\n`, no embedded `\r` in the body text)
+  are unaffected either way - this only bites when the captured content
+  already has literal `\r` in it.
 
 ## Live testing: staging only, never production
 - `DATABASE_URL` is production. `DATABASE_URL_STAGING` (also in `.env`) is a
@@ -66,6 +78,23 @@
   one but not the other), re-sync it with a fresh `pg_dump --schema-only`
   from production before trusting staging test results again - don't test
   against a staging schema you haven't confirmed matches.
+- Known-benign byte-level difference (2026-08-27): staging's stored bodies
+  for `staff_receive_stock`, `staff_open_day`, `staff_close_day`, and
+  `staff_submit_eod` have `\r\n` line endings baked into every line, where
+  production has plain `\n` - `pg_get_functiondef()` byte counts and `cmp`
+  will show these four as differing even though the statements are
+  word-for-word identical (confirmed with `od -c` at the divergence point:
+  only the trailing `\r` differs). Root cause: `supabase-schema-part6e-
+  remaining-idempotent.sql` (the file that created these four on staging)
+  has CRLF line endings on disk, and applying it via `psql -f` on Windows
+  preserved that literally inside the dollar-quoted function bodies;
+  production was built through a path that normalized to LF. Inert -
+  Postgres's SQL/PL/pgSQL lexer treats `\r` as whitespace - and left as-is
+  deliberately: dropping and recreating four live functions to fix
+  non-executing bytes is more risk than the condition itself. `diff` and
+  `grep -c $'\r'` were both unreliable for detecting this in this
+  environment (silently normalized/false-negatived); `od -c` is the tool
+  that actually caught it.
 
 ## Settled scope decisions (do not re-litigate)
 - Do not auto-seed shop or reference rows — wait for explicit pasted 
