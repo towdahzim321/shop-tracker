@@ -1414,6 +1414,75 @@ async function installRealtimeBumpCapture(page, shopId) {
     await page.close();
   }
 
+  console.log('\n== 30. EOD: a background bump() with nothing focused (no RPC in flight) must not wipe a half-typed form ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'eod', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [] };
+      render();
+    });
+    await installRealtimeBumpCapture(page, 'harare');
+    await installRenderCounter(page);
+
+    // Real typing via locators, not page.evaluate() - setting .value directly
+    // would never exercise the oninput path a real keystroke goes through,
+    // and a previous test in this repo passed with an equivalent fix
+    // stripped for exactly that reason.
+    await page.locator('#eodCount').fill('42');
+    await page.locator('#eodFaulty').fill('3');
+    await page.locator('#eodCash').fill('950');
+    // Real Tab press off the last field, landing on the submit button - no
+    // RPC in flight, nothing with an INPUT/TEXTAREA/SELECT tag focused.
+    // That's the actual gap: bump()'s activeElement guard only checks the
+    // tag name of whatever's currently focused, and a button doesn't match.
+    await page.locator('#eodCash').press('Tab');
+    check('focus landed off the form (not an input/textarea/select)', (await page.evaluate(() => ['INPUT','TEXTAREA','SELECT'].indexOf(document.activeElement.tagName))) === -1);
+
+    const rendersBefore = await page.evaluate(() => window.__renderCalls);
+    await page.evaluate(() => { if (window.__realtimeBumpCallback) window.__realtimeBumpCallback(); });
+    await page.waitForTimeout(200);
+
+    check('the background bump actually rendered - proves this exercises the unguarded path, not a vacuous pass', (await page.evaluate(() => window.__renderCalls)) > rendersBefore);
+    check('the good-phone count survived the background render', (await page.locator('#eodCount').inputValue()) === '42');
+    check('the faulty count survived the background render', (await page.locator('#eodFaulty').inputValue()) === '3');
+    check('the cash figure survived the background render', (await page.locator('#eodCash').inputValue()) === '950');
+
+    await page.close();
+  }
+
+  console.log('\n== 31. EOD: a blank faulty-count field is rejected, never silently submitted as 0 ==');
+  {
+    const page = await newPage(browser);
+    await page.evaluate(() => {
+      S = { view: 'eod', shopId: 'harare', staffId: 's1', staffName: 'Test' };
+      SHOP_CACHE['harare'] = { inventory: [], dailyLogs: [], activity: [], businessDays: [{date: todayStr(), status: 'open'}], ledger: [] };
+      render();
+    });
+    await installControllableRpc(page);
+
+    await page.locator('#eodCount').fill('10');
+    // eodFaulty deliberately left blank.
+    await page.locator('#eodCash').fill('500');
+    await page.locator('#eodSubmitBtn').click();
+    await page.waitForTimeout(200);
+
+    check('the RPC is never called with a blank faulty count', (await page.evaluate(() => window.__rpcCalls)) === 0);
+    const errText = await page.evaluate(() => document.getElementById('eodErr').innerText);
+    check('a clear rejection message is shown instead of a silent submit', /faulty/i.test(errText) && /(blank|0 if none|type 0)/i.test(errText), errText);
+    check('the button is not locked - validation failed before any submit attempt started', (await page.evaluate(() => document.getElementById('eodSubmitBtn').disabled)) === false);
+
+    // A genuinely typed, deliberate 0 - must be accepted normally, not
+    // treated as equivalent to blank.
+    await page.locator('#eodFaulty').fill('0');
+    await page.locator('#eodSubmitBtn').click();
+    await page.waitForTimeout(200);
+    check('a deliberately typed 0 does reach the RPC', (await page.evaluate(() => window.__rpcCalls)) === 1);
+    check('the RPC receives the deliberate 0 for faulty count', (await page.evaluate(() => window.__lastRpcParams.p_faulty_count)) === 0);
+
+    await page.close();
+  }
+
   await browser.close();
   console.log('\n' + (failures === 0 ? 'ALL OUTBOX UI CHECKS PASSED' : failures + ' FAILED'));
   process.exit(failures === 0 ? 0 : 1);

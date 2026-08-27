@@ -2607,24 +2607,40 @@ function screenEod(){
     <div style="font-size:13px;color:var(--text-soft);margin-bottom:14px;">Expenses today: ${money(expenseTotal)} (${todaysExpenses.length} logged)</div>
     <div class="field">
       <label>1. Good phones on the shelf (count them now, one by one)</label>
-      <input type="tel" inputmode="numeric" id="eodCount" value="${existing?existing.physicalCount:''}" placeholder="e.g. 42" ${queued?'disabled':''}>
+      <input type="tel" inputmode="numeric" id="eodCount" oninput="syncEodFields()" value="${esc(S.eodCount!=null ? S.eodCount : (existing?existing.physicalCount:''))}" placeholder="e.g. 42" ${queued?'disabled':''}>
     </div>
     <div class="field">
       <label>2. Faulty phones on the faulty shelf (count separately)</label>
-      <input type="tel" inputmode="numeric" id="eodFaulty" value="${existing && existing.faultyCount!==undefined && existing.faultyCount!==null ? existing.faultyCount : ''}" placeholder="e.g. 2 (put 0 if none)" ${queued?'disabled':''}>
+      <input type="tel" inputmode="numeric" id="eodFaulty" oninput="syncEodFields()" value="${esc(S.eodFaulty!=null ? S.eodFaulty : (existing && existing.faultyCount!==undefined && existing.faultyCount!==null ? existing.faultyCount : ''))}" placeholder="e.g. 2 (put 0 if none)" ${queued?'disabled':''}>
     </div>
     <div class="field">
       <label>3. Cash collected today ($)</label>
-      <input type="tel" inputmode="decimal" id="eodCash" value="${existing?existing.cash:''}" placeholder="e.g. 950" ${queued?'disabled':''}>
+      <input type="tel" inputmode="decimal" id="eodCash" oninput="syncEodFields()" value="${esc(S.eodCash!=null ? S.eodCash : (existing?existing.cash:''))}" placeholder="e.g. 950" ${queued?'disabled':''}>
     </div>
     <div id="eodErr"></div>
     ${queued ? queuedActionNotice(queued) : `<button class="btn btn-amber btn-full-center" id="eodSubmitBtn" onclick="confirmEod()">Submit end of day</button>`}
   </div>`;
 }
+// Live-synced (oninput), not checkpoint-only like syncReturnNotes()/
+// syncExpenseFields() - a background render here (bump()/pollTick() firing
+// in the pause between fields, or before either is focused, with no RPC in
+// flight to guard against) has no other checkpoint to catch it at, since
+// this screen's only other sync point is submit itself, by which point a
+// wipe would already have happened.
+function syncEodFields(){
+  const c = document.getElementById('eodCount'); if(c) S.eodCount = c.value;
+  const f = document.getElementById('eodFaulty'); if(f) S.eodFaulty = f.value;
+  const cash = document.getElementById('eodCash'); if(cash) S.eodCash = cash.value;
+}
 async function confirmEod(){
+  syncEodFields();
   const count = parseInt(document.getElementById('eodCount').value.trim());
   const faultyRaw = document.getElementById('eodFaulty').value.trim();
-  const faulty = faultyRaw === '' ? 0 : parseInt(faultyRaw);
+  // A blank field must never silently become 0 - a shop can legitimately
+  // have zero faulty phones, but that has to be a typed, deliberate 0, not
+  // an empty box passed straight through into reconciliation.
+  if(faultyRaw === ''){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter how many faulty phones you counted (type 0 if none - do not leave it blank).</div>'; return; }
+  const faulty = parseInt(faultyRaw);
   const cash = parseFloat(document.getElementById('eodCash').value.trim());
   if(isNaN(count) || count<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter how many good phones you counted.</div>'; return; }
   if(isNaN(faulty) || faulty<0){ document.getElementById('eodErr').innerHTML = '<div class="err">Enter how many faulty phones you counted (put 0 if none).</div>'; return; }
@@ -2652,6 +2668,7 @@ async function confirmEod(){
       return;
     }
     S.eodIdemKey = null;
+    S.eodCount = null; S.eodFaulty = null; S.eodCash = null;
     await refreshShopData(S.shopId);
     showSuccessThen('End of day submitted. Thank you!', 'staffMenu');
   } finally {
