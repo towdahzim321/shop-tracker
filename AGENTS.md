@@ -106,7 +106,12 @@
   separate Supabase project holding a schema-only copy of production (no
   real staff, no real pin hashes, no real stock/ledger/daily_logs history)
   seeded only with the three real shop rows (harare/bulawayo1/bulawayo2,
-  id+name+active+sort_order - not sensitive) and one fake staff member.
+  id+name+active+sort_order - not sensitive) and one fake staff member
+  ("Staging Test Staff", shop harare, id df24e055-71c0-48ce-a104-
+  be7e4f0808d8). Its PIN is `4291`, set during security-7's staff_sessions
+  verification - noted here so a future session doesn't have to rediscover
+  it (or reset it again, invalidating this note) just to call staff_login
+  against staging.
 - Any test that drives the actual app against a real Supabase backend -
   button-lock behavior, network-throttling/rapid-tap tests, "does this
   actually land one row not five," multi-step same-visit flows, anything
