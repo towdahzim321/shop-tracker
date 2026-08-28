@@ -36,6 +36,30 @@
   Supabase grants EXECUTE directly to anon and authenticated. Every 
   revoke must explicitly list `public, anon, authenticated`, followed 
   by a verification query.
+- Production's `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA 
+  public` grants `anon`/`authenticated` full privileges (`arwdDxtm` — 
+  insert/select/update/delete/truncate/references/trigger/maintain) on 
+  every relation `postgres` creates in `public` (confirmed live via 
+  `pg_default_acl`, identical on production and staging). RLS still 
+  gates a normal new table despite that grant — but a `postgres`-owned 
+  VIEW over an RLS-enabled table bypasses that table's row-level 
+  policies entirely (view-ownership exemption), so a newly created 
+  view in `public` is fully anon-writable at the row level from the 
+  moment it's created, unless explicitly revoked. `CREATE OR REPLACE 
+  VIEW` on an existing view preserves its current grants and does not 
+  re-trigger this; a fresh `CREATE VIEW` (including `DROP` + `CREATE`) 
+  does. Any migration that creates a view in `public` must end with:
+  ```sql
+  begin;
+  revoke all on <view> from public, anon, authenticated;
+  grant select on <view> to anon, authenticated;  -- or narrower, per the view's intended readers
+  commit;
+  ```
+  PG17 added `MAINTAIN` (the `m` in `arwdDxtm`) as a separately-grantable 
+  privilege — use `revoke all`, not an enumerated list, or `MAINTAIN` 
+  gets left behind. See `supabase-schema-security-4-staff-view-grant-
+  hardening.sql` for a worked example (staff_public, phones_staff_view, 
+  ledger_staff_view).
 
 ## Client/server parity
 - Any server-side business rule change (uniqueness constraints, required 
