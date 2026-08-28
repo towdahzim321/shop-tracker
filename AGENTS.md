@@ -82,9 +82,24 @@
   original byte-for-byte (confirmed with `cmp`), the filepath form did not.
   When byte-exact replay of captured DDL matters (e.g. restoring a function
   after a mutation test), pipe through stdin, don't pass a filepath to `-f`.
-  Ordinary migration files (plain `\n`, no embedded `\r` in the body text)
-  are unaffected either way - this only bites when the captured content
-  already has literal `\r` in it.
+- Correction, found while applying `supabase-schema-security-5-staff-of-
+  shop-search-path.sql`: stdin avoids the *doubling* bug above, but does
+  NOT avoid `\r` appearing at all. `psql.exe` on this machine injects a
+  single `\r` before every `\n` while reading stdin and storing a
+  dollar-quoted body, even from a verified plain-`\n` source file - checked
+  byte-for-byte that session: the source file was 0 CR / 115 LF, `cat`'s
+  output captured right before the pipe was also 0 CR, but the live
+  function body that resulted had CR count = LF count = CRLF-pair count,
+  with zero doubled `\r\r`. So a plain-`\n` migration file is NOT "unaffected
+  either way" as previously stated here - applying it by any method on this
+  machine leaves it with `\r\n` line endings baked into the stored body.
+  This is inert (Postgres's SQL/PL/pgSQL lexer treats `\r` as whitespace) -
+  same conclusion as the CRLF note below - so it's not worth fighting. The
+  check that actually matters when verifying a body wasn't corrupted is
+  **zero occurrences of doubled `\r\r`**, not zero occurrences of `\r`
+  (`grep`/`diff` are unreliable for this, per the CRLF note below - use
+  `od -An -tx1 -v file | tr -d ' \n'` and count `0d0d` substrings; zero
+  hits is clean, any hit is real doubling).
 
 ## Live testing: staging only, never production
 - `DATABASE_URL` is production. `DATABASE_URL_STAGING` (also in `.env`) is a
