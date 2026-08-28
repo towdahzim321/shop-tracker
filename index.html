@@ -1175,6 +1175,9 @@ function ledgerEntryText(e){
     case 'deleted': return 'Entry deleted by '+who+': '+nm;
     case 'expense': return who+' logged an expense: '+e.category+' - '+money(e.price)+(e.expenseNote?' ('+e.expenseNote+')':'');
     case 'deleted_expense': return 'Expense deleted by '+who+': '+e.category+' - '+money(e.price);
+    case 'swap_out': return who+' swapped in '+nm+' as a replacement, priced at '+money(e.price);
+    case 'swap_topup': return who+' collected a swap top-up of '+money(e.price);
+    case 'refund': return who+' refunded '+money(e.price)+' for '+nm;
     default: return e.note || (who+' - '+e.type);
   }
 }
@@ -1776,6 +1779,9 @@ function viewFor(v){
     case 'salePrice': return screenSalePrice();
     case 'return': return screenReturn();
     case 'returnReason': return screenReturnReason();
+    case 'returnReplacement': return screenReturnReplacement();
+    case 'returnTopup': return screenReturnTopup();
+    case 'returnRefundAmount': return screenReturnRefundAmount();
     case 'receive': return screenReceive();
     case 'expense': return screenExpense();
     case 'eod': return screenEod();
@@ -2096,6 +2102,23 @@ function screenStaffDash(){
 let selectedPhone = null;
 let saleIdemKey = null;
 let returnIdemKey = null;
+// Plain top-level variables, not S fields, for the same reason
+// selectedPhone/returnIdemKey above are: navTo()/go() replaces S entirely
+// on every navigation, keeping only shopId/staffId/staffName (see go()) -
+// anything set on S right before a navTo() call is silently wiped the
+// instant that navigation happens. The plain-return path never crossed a
+// navTo() boundary between picking a reason and confirming, so S fields
+// happened to work for it; the swap/refund paths span multiple screens
+// (reason -> replacement picker -> top-up, or reason -> refund amount),
+// so their state has to live here instead.
+let returnReason = null;
+let returnFaultParts = null;
+let returnNotes = null;
+let returnOutcome = null;
+let returnSameModelOnly = false;
+let returnReplacementId = null;
+let returnTopupAmount = null;
+let returnRefundAmount = null;
 let openDayIdemKey = null;
 let closeDayIdemKey = null;
 function dayNotOpenScreen(){
@@ -2233,10 +2256,18 @@ function screenReturn(){
 function pickReturnPhone(phoneId){
   const data = SHOP_CACHE[S.shopId];
   selectedPhone = data.inventory.find(p=>p.id===phoneId);
+  // Minted once, here, at flow entry - every screen and function downstream
+  // (reason, outcome, replacement picker, top-up/refund amount, confirm)
+  // reuses this same key. Nothing past this point calls genUuid() for it.
   returnIdemKey = genUuid();
-  S.returnReason = null;
-  S.returnFaultParts = null;
-  S.returnNotes = null;
+  returnReason = null;
+  returnFaultParts = null;
+  returnNotes = null;
+  returnOutcome = null;
+  returnSameModelOnly = false;
+  returnReplacementId = null;
+  returnTopupAmount = null;
+  returnRefundAmount = null;
   navTo('returnReason');
 }
 function screenReturnReason(){
@@ -2250,52 +2281,188 @@ function screenReturnReason(){
       <div class="imei">IMEI: ${esc(selectedPhone.imei)} &middot; sold for ${money(selectedPhone.salePrice)}</div>
     </div>
     <div class="reason-grid" id="reasonGrid">
-      ${RETURN_REASONS.map(r=>`<div class="reason-btn ${S.returnReason===r?'selected':''}" data-r="${esc(r)}" onclick="selectReason('${esc(r)}')">${esc(r)}</div>`).join('')}
+      ${RETURN_REASONS.map(r=>`<div class="reason-btn ${returnReason===r?'selected':''}" data-r="${esc(r)}" onclick="selectReason('${esc(r)}')">${esc(r)}</div>`).join('')}
     </div>
-    ${S.returnReason==='Faulty' ? `
+    ${returnReason==='Faulty' ? `
       <h2>Which part(s) are faulty?</h2>
       <p class="lead" style="margin-bottom:10px;">For our records and the warranty card, which doesn't cover every fault.</p>
       <div class="reason-grid" id="faultGrid">
-        ${FAULT_PARTS.map(f=>`<div class="reason-btn ${(S.returnFaultParts||[]).includes(f)?'selected':''}" data-f="${esc(f)}" onclick="toggleFaultPart('${esc(f)}')">${esc(f)}</div>`).join('')}
+        ${FAULT_PARTS.map(f=>`<div class="reason-btn ${(returnFaultParts||[]).includes(f)?'selected':''}" data-f="${esc(f)}" onclick="toggleFaultPart('${esc(f)}')">${esc(f)}</div>`).join('')}
       </div>
       <div class="field">
         <label>Additional notes (optional)</label>
-        <textarea id="returnNotesInput" placeholder="Any extra detail for the warranty record">${esc(S.returnNotes||'')}</textarea>
+        <textarea id="returnNotesInput" placeholder="Any extra detail for the warranty record">${esc(returnNotes||'')}</textarea>
       </div>
     ` : ''}
     <div id="returnErr"></div>
-    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm return</button>`}
+    ${queued ? queuedActionNotice(queued) : `
+    <button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Return only - to stock/faulty shelf</button>
+    <button class="btn btn-outline btn-full-center" onclick="startSwap(false)">Swap for a different model</button>
+    <button class="btn btn-outline btn-full-center" onclick="startSwap(true)">Swap for the same model</button>
+    <button class="btn btn-outline btn-full-center" onclick="startRefund()">Refund instead</button>
+    `}
   </div>`;
 }
-function syncReturnNotes(){ const el = document.getElementById('returnNotesInput'); if(el) S.returnNotes = el.value; }
+function syncReturnNotes(){ const el = document.getElementById('returnNotesInput'); if(el) returnNotes = el.value; }
+// Same reason/fault-parts guard confirmReturn() already has, run before any
+// of the three swap/refund paths - reason capture happens once, up front,
+// the same for every outcome; it doesn't know or care which outcome comes
+// next.
+function requireReturnReasonPicked(){
+  syncReturnNotes();
+  if(!returnReason){ document.getElementById('returnErr').innerHTML = '<div class="err">Pick a reason for the return.</div>'; return false; }
+  if(returnReason==='Faulty' && (!returnFaultParts || returnFaultParts.length===0)){ document.getElementById('returnErr').innerHTML = '<div class="err">Select at least one faulty part.</div>'; return false; }
+  return true;
+}
+function startSwap(sameModel){
+  if(!requireReturnReasonPicked()) return;
+  returnOutcome = 'swap';
+  returnSameModelOnly = sameModel;
+  returnReplacementId = null;
+  navTo('returnReplacement');
+}
+function startRefund(){
+  if(!requireReturnReasonPicked()) return;
+  returnOutcome = 'refund';
+  returnRefundAmount = null;
+  navTo('returnRefundAmount');
+}
+function screenReturnReplacement(){
+  if(!selectedPhone) return screenHome();
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  const inStock = data.inventory.filter(p=>p.status==='in_stock' && p.id!==selectedPhone.id)
+    .sort((a,b)=>a.model.localeCompare(b.model));
+  // "Same model" pre-fills the existing search box rather than hard-
+  // filtering the list - reuses attachSearchFilter()/renderPhoneList() as
+  // they already are, and staff can still widen or change the search if
+  // the exact model isn't in stock right now.
+  const prefill = returnSameModelOnly ? selectedPhone.model : '';
+  setTimeout(()=>{
+    // attachSearchFilter() first, so its 'input' listener actually exists
+    // before the synthetic event below fires - dispatching first would
+    // hit an unattached input and never filter the initial render.
+    attachSearchFilter('replacementSearch','replacementList');
+    const input = document.getElementById('replacementSearch');
+    if(input && prefill){ input.value = prefill; input.dispatchEvent(new Event('input')); }
+  },0);
+  return `
+  ${topbar(shopName(S.shopId), 'Pick the replacement phone', true)}
+  <div class="content">
+    <div class="card">
+      <div class="imei">Returning: ${esc(selectedPhone.model)} &middot; sold for ${money(selectedPhone.salePrice)}</div>
+    </div>
+    <div class="search-box field">
+      <label>Search by model or IMEI</label>
+      <input type="text" id="replacementSearch" placeholder="e.g. A15 or last 4 digits">
+    </div>
+    <div id="replacementList">
+      ${renderPhoneList(inStock, 'pickReturnReplacement')}
+    </div>
+  </div>`;
+}
+function pickReturnReplacement(phoneId){
+  returnReplacementId = phoneId;
+  returnTopupAmount = null;
+  navTo('returnTopup');
+}
+function screenReturnTopup(){
+  if(!selectedPhone || !returnReplacementId) return screenHome();
+  const data = SHOP_CACHE[S.shopId] || emptyShopData();
+  const replacement = data.inventory.find(p=>p.id===returnReplacementId);
+  if(!replacement) return screenHome();
+  // Client-computed starting value only - staff can edit it to anything
+  // >= 0; the server enforces >= 0, not this specific arithmetic.
+  const suggested = Math.max(0, (replacement.listPrice||0) - (selectedPhone.salePrice||0));
+  const queued = findQueuedOutboxEntry('staff_return_phone', p => p.p_phone_id === selectedPhone.id);
+  return `
+  ${topbar(shopName(S.shopId), 'Swap - top-up', true)}
+  <div class="content">
+    <div class="card">
+      <div class="imei">Returning: ${esc(selectedPhone.model)} &middot; sold for ${money(selectedPhone.salePrice)}</div>
+      <div class="imei">Replacement: ${esc(replacement.model)}${replacement.description ? ' - '+esc(replacement.description) : ''} &middot; priced at ${money(replacement.listPrice)}</div>
+    </div>
+    <div class="field">
+      <label>Top-up to collect ($, 0 if this is an even swap)</label>
+      <input type="tel" inputmode="decimal" id="topupInput" placeholder="e.g. 50" value="${returnTopupAmount!=null ? returnTopupAmount : suggested}" ${queued?'disabled':''}>
+    </div>
+    <div id="returnErr"></div>
+    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm swap</button>`}
+  </div>`;
+}
+function screenReturnRefundAmount(){
+  if(!selectedPhone) return screenHome();
+  const queued = findQueuedOutboxEntry('staff_return_phone', p => p.p_phone_id === selectedPhone.id);
+  return `
+  ${topbar(shopName(S.shopId), 'Refund amount', true)}
+  <div class="content">
+    <div class="card">
+      <div style="font-size:17px;font-weight:700;">${esc(selectedPhone.model)}</div>
+      <div class="imei">IMEI: ${esc(selectedPhone.imei)} &middot; sold for ${money(selectedPhone.salePrice)}</div>
+    </div>
+    <div class="field">
+      <label>Refund amount ($)</label>
+      <input type="tel" inputmode="decimal" id="refundInput" placeholder="e.g. ${selectedPhone.salePrice||''}" value="${returnRefundAmount!=null ? returnRefundAmount : (selectedPhone.salePrice||'')}" ${queued?'disabled':''}>
+    </div>
+    <div id="returnErr"></div>
+    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm refund</button>`}
+  </div>`;
+}
 function selectReason(r){
   syncReturnNotes();
-  S.returnReason = r;
-  if(r!=='Faulty') S.returnFaultParts = [];
+  returnReason = r;
+  if(r!=='Faulty') returnFaultParts = [];
   render();
 }
 function toggleFaultPart(f){
   syncReturnNotes();
-  if(!S.returnFaultParts) S.returnFaultParts = [];
-  const i = S.returnFaultParts.indexOf(f);
-  if(i>=0) S.returnFaultParts.splice(i,1); else S.returnFaultParts.push(f);
+  if(!returnFaultParts) returnFaultParts = [];
+  const i = returnFaultParts.indexOf(f);
+  if(i>=0) returnFaultParts.splice(i,1); else returnFaultParts.push(f);
   render();
 }
 async function confirmReturn(){
-  syncReturnNotes();
-  if(!S.returnReason){ document.getElementById('returnErr').innerHTML = '<div class="err">Pick a reason for the return.</div>'; return; }
-  if(S.returnReason==='Faulty' && (!S.returnFaultParts || S.returnFaultParts.length===0)){ document.getElementById('returnErr').innerHTML = '<div class="err">Select at least one faulty part.</div>'; return; }
+  if(!requireReturnReasonPicked()) return;
+  const intent = returnOutcome || 'return';
+
+  // Resolved from the entered amount, not decided up front: a swap intent
+  // with a top-up of 0 IS the even-swap case (p_outcome='swap'), a top-up
+  // above 0 makes it p_outcome='swap_topup'. Staff never has to declare
+  // which one before they even know the price difference.
+  let outcome = intent, topupAmount = null, refundAmount = null;
+  if(intent==='swap'){
+    const topupEl = document.getElementById('topupInput');
+    const v = parseFloat((topupEl?topupEl.value:'').trim());
+    if(isNaN(v) || v<0){ document.getElementById('returnErr').innerHTML = '<div class="err">Enter a top-up amount of zero or more.</div>'; return; }
+    returnTopupAmount = v;
+    if(v>0){ outcome = 'swap_topup'; topupAmount = v; } else { outcome = 'swap'; }
+  } else if(intent==='refund'){
+    const refundEl = document.getElementById('refundInput');
+    const v = parseFloat((refundEl?refundEl.value:'').trim());
+    if(isNaN(v) || v<=0){ document.getElementById('returnErr').innerHTML = '<div class="err">Enter a refund amount greater than zero.</div>'; return; }
+    if(v > (selectedPhone.salePrice||0)){ document.getElementById('returnErr').innerHTML = '<div class="err">Refund cannot exceed the original sale price ('+money(selectedPhone.salePrice)+').</div>'; return; }
+    returnRefundAmount = v;
+    refundAmount = v;
+  }
+
   const phoneId = selectedPhone.id;
-  const reason = S.returnReason;
-  const parts = reason==='Faulty' ? (S.returnFaultParts||[]) : null;
-  const notes = S.returnNotes || null;
+  const reason = returnReason;
+  const parts = reason==='Faulty' ? (returnFaultParts||[]) : null;
+  const notes = returnNotes || null;
   const isFaulty = reason === 'Faulty';
   const modelLabel = selectedPhone.model;
+  const replacementId = returnReplacementId;
   const date = todayStr();
   const label = lockBtnSaving('returnConfirmBtn');
   CRITICAL_FLOW_IN_PROGRESS = true;
   try{
-    const params = {p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId, p_reason: reason, p_fault_parts: parts, p_notes: notes, p_idempotency_key: returnIdemKey};
+    const params = {
+      p_shop_id: S.shopId, p_staff_id: S.staffId, p_local_date: date, p_phone_id: phoneId,
+      p_reason: reason, p_fault_parts: parts, p_notes: notes, p_idempotency_key: returnIdemKey,
+      p_outcome: outcome,
+      p_replacement_phone_id: (outcome==='swap'||outcome==='swap_topup') ? replacementId : null,
+      p_topup_amount: topupAmount,
+      p_refund_amount: refundAmount,
+    };
     const res = await callRpc('staff_return_phone', params);
     if(!res.ok){
       if(res.noReply){
@@ -2313,9 +2480,19 @@ async function confirmReturn(){
     await refreshShopData(S.shopId);
     selectedPhone = null;
     returnIdemKey = null;
-    S.returnFaultParts = null;
-    S.returnNotes = null;
-    showSuccessThen(isFaulty ? 'Return recorded. Put this phone on the faulty shelf - do not sell it.' : 'Return recorded. Phone is back in stock.', 'staffMenu');
+    returnReason = null;
+    returnFaultParts = null;
+    returnNotes = null;
+    returnOutcome = null;
+    returnSameModelOnly = false;
+    returnReplacementId = null;
+    returnTopupAmount = null;
+    returnRefundAmount = null;
+    const msg = outcome==='swap' ? 'Swap recorded. Replacement phone marked sold.'
+      : outcome==='swap_topup' ? 'Swap recorded with top-up. Replacement phone marked sold.'
+      : outcome==='refund' ? 'Refund recorded.'
+      : (isFaulty ? 'Return recorded. Put this phone on the faulty shelf - do not sell it.' : 'Return recorded. Phone is back in stock.');
+    showSuccessThen(msg, 'staffMenu');
   } finally {
     CRITICAL_FLOW_IN_PROGRESS = false;
     if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
@@ -2727,11 +2904,25 @@ function screenEod(){
   // pre-scoped.
   const todaysExpenses = (data.expenses||[]).filter(e=>e.date===today);
   const expenseTotal = todaysExpenses.reduce((a,e)=>a+e.amount,0);
+  // Same display-only reasoning as expenses above, for the two cash events
+  // a swap-with-topup/refund can produce - no comparison to cash/revenue,
+  // just context for whoever is about to count the till. ledger has no
+  // plain date column (only ts), so scoped to today via the same
+  // start/endOfDayTs helpers buildStockSheet already uses. data.ledger is
+  // populated for staff too (ledger_staff_view, same field shape).
+  const sTs = startOfDayTs(today), eTs = endOfDayTs(today);
+  const todaysLedger = (data.ledger||[]).filter(l=>l.ts>=sTs && l.ts<=eTs);
+  const todaysTopups = todaysLedger.filter(l=>l.type==='swap_topup');
+  const topupTotal = todaysTopups.reduce((a,l)=>a+(l.price||0),0);
+  const todaysRefunds = todaysLedger.filter(l=>l.type==='refund');
+  const refundTotal = todaysRefunds.reduce((a,l)=>a+(l.price||0),0);
   return `
   ${topbar(shopName(S.shopId), 'End of day', true)}
   <div class="content">
     ${existing ? `<div class="warn-banner">You already submitted today's count and cash. Submitting again will replace it.</div>` : ''}
     <div style="font-size:13px;color:var(--text-soft);margin-bottom:14px;">Expenses today: ${money(expenseTotal)} (${todaysExpenses.length} logged)</div>
+    <div style="font-size:13px;color:var(--text-soft);margin-bottom:14px;">Top-ups today: ${money(topupTotal)} (${todaysTopups.length} logged)</div>
+    <div style="font-size:13px;color:var(--text-soft);margin-bottom:14px;">Refunds today: ${money(refundTotal)} (${todaysRefunds.length} logged)</div>
     <div class="field">
       <label>1. Good phones on the shelf (count them now, one by one)</label>
       <input type="tel" inputmode="numeric" id="eodCount" oninput="syncEodFields()" value="${esc(S.eodCount!=null ? S.eodCount : (existing?existing.physicalCount:''))}" placeholder="e.g. 42" ${queued?'disabled':''}>
@@ -3434,6 +3625,10 @@ function replayState(events, untilTs){
       case 'undo_sale':   st[id].place = 'stock'; break;
       case 'undo_return': st[id].place = 'sold'; break;
       case 'deleted':     st[id].place = 'gone'; break;
+      case 'swap_out':    st[id].place = 'sold'; break;
+      // swap_topup/refund: pure cash events, no stock-place implication -
+      // no case needed, falls through safely same as any other unhandled
+      // type.
     }
   });
   return st;
@@ -3458,7 +3653,7 @@ function buildStockSheet(shopId, date){
   const open = countPlace(openState, 'stock');
   const close = countPlace(closeState, 'stock');
   const dayEvents = events.filter(e=>e.ts>=sTs && e.ts<=eTs);
-  const salesQty={}, salesAmt={}, recv={}, retStock={}, retFaulty={}, rep={}, off={};
+  const salesQty={}, salesAmt={}, recv={}, retStock={}, retFaulty={}, rep={}, off={}, swapOut={};
   dayEvents.forEach(e=>{
     const k = sheetKey(e);
     if(e.type==='sold'){ salesQty[k]=(salesQty[k]||0)+1; salesAmt[k]=(salesAmt[k]||0)+(e.price||0); }
@@ -3467,9 +3662,16 @@ function buildStockSheet(shopId, date){
     else if(e.type==='returned'){ if(e.toFaulty) retFaulty[k]=(retFaulty[k]||0)+1; else retStock[k]=(retStock[k]||0)+1; }
     else if(e.type==='repaired'){ rep[k]=(rep[k]||0)+1; }
     else if(e.type==='written_off'){ off[k]=(off[k]||0)+1; }
+    // swap_out: the unit genuinely left the shelf, so it counts as a sale
+    // for the opening+received-sales=closing math same as an ordinary
+    // sale would - but never into salesAmt. What actually moved in cash
+    // (0 for an even swap, the top-up for a priced one) is a separate
+    // swap_topup event entirely, surfaced on the EOD screen instead -
+    // folding it in here would misrepresent this model's revenue.
+    else if(e.type==='swap_out'){ swapOut[k]=(swapOut[k]||0)+1; salesQty[k]=(salesQty[k]||0)+1; }
   });
   const seen = {};
-  [open, close, salesQty, recv, retStock, retFaulty, rep, off].forEach(m=>Object.keys(m).forEach(k=>{ seen[k]=true; }));
+  [open, close, salesQty, recv, retStock, retFaulty, rep, off, swapOut].forEach(m=>Object.keys(m).forEach(k=>{ seen[k]=true; }));
   const rows = Object.keys(seen).sort().map(k=>{
     // Goods received has its own column. Comments carry only the movements that
     // would otherwise make opening + received - sales fail to equal closing.
@@ -3478,6 +3680,7 @@ function buildStockSheet(shopId, date){
     if(rep[k]) notes.push('+' + rep[k] + ' repaired');
     if(retFaulty[k]) notes.push('-' + retFaulty[k] + ' to faulty shelf');
     if(off[k]) notes.push('-' + off[k] + ' written off');
+    if(swapOut[k]) notes.push(swapOut[k] + ' swapped out (no cash)');
     return {model:k, opening:open[k]||0, received:recv[k]||0, sales:salesQty[k]||0, closing:close[k]||0, amount:salesAmt[k]||0, notes:notes.join(', ')};
   }).filter(r=> r.opening || r.closing || r.sales || r.received || r.notes);
   return {
@@ -4000,7 +4203,17 @@ function buildTransactionsForShop(shopId){
   // Records created before the ledger existed still show up.
   data.inventory.forEach(p=>{
     if(p.receivedTs && !covered.has(p.id+'|received')) events.push({type:'received', ts:p.receivedTs, model:p.model, description:p.description, imei:p.imei, shopId, phoneId:p.id});
-    if(p.soldTs && !covered.has(p.id+'|sold')) events.push({type:'sold', ts:p.soldTs, model:p.model, description:p.description, imei:p.imei, price:p.salePrice, shopId, phoneId:p.id, belowPrice:p.belowPrice, shortfall:p.priceShortfall});
+    // A swap replacement gets sold_ts set (same as any other sold phone -
+    // see staff_return_phone's swap/swap_topup branch) but its ledger event
+    // is 'swap_out', not 'sold' - without also checking that here, this
+    // pre-ledger fallback doesn't recognise it as covered and synthesises a
+    // second, phantom 'sold' event alongside the real 'swap_out' one,
+    // double-counting the phone in buildStockSheet's Sales column and (via
+    // the phantom event's type='sold') wrongly adding its price into
+    // salesAmt - exactly the phantom-cash risk this feature was designed to
+    // avoid. Caught live while verifying Stage 2/3 together on staging, not
+    // theoretical.
+    if(p.soldTs && !covered.has(p.id+'|sold') && !covered.has(p.id+'|swap_out')) events.push({type:'sold', ts:p.soldTs, model:p.model, description:p.description, imei:p.imei, price:p.salePrice, shopId, phoneId:p.id, belowPrice:p.belowPrice, shortfall:p.priceShortfall});
     if(p.returnedTs && !covered.has(p.id+'|returned')) events.push({type:'returned', ts:p.returnedTs, model:p.model, description:p.description, imei:p.imei, reason:p.returnReason, faultParts:p.faultParts, shopId, phoneId:p.id});
   });
   return events;
@@ -4010,7 +4223,8 @@ const TX_LABELS = {sold:'Sold', returned:'Returned', received:'Received', repair
   undo_sale:'Sale undone', undo_return:'Return undone', deleted:'Entry deleted', deleted_eod:'Day log deleted',
   price_set:'Prices set', cash_confirmed:'Cash confirmed', cash_adjustment:'Cash adjusted', eod:'End of day', reopen:'Day reopened',
   shop_added:'Shop added', shop_renamed:'Shop renamed', shop_closed:'Shop closed',
-  expense:'Expense', deleted_expense:'Expense deleted'};
+  expense:'Expense', deleted_expense:'Expense deleted',
+  swap_out:'Swapped out', swap_topup:'Swap top-up', refund:'Refund'};
 function txChipClass(t){
   if(t==='sold' || t==='expense') return 'chip-red';
   if(t==='received' || t==='repaired') return 'chip-green';
