@@ -3361,6 +3361,26 @@ function screenOwnerFaulty(){
   const faulty = data.inventory.filter(p=>p.status==='faulty').sort((a,b)=>(b.returnedTs||0)-(a.returnedTs||0));
   const off = data.inventory.filter(p=>p.status==='written_off').sort((a,b)=>(b.writtenOffAt||0)-(a.writtenOffAt||0));
   const offCost = off.reduce((a,p)=>a+(p.costPrice||0),0);
+  // "sold for" below reads the ledger, not phones.sale_price - that column
+  // gets cleared on every future return (staff_return_phone's six-column
+  // clear, mirroring admin_undo_sale), so it can't be trusted here. The
+  // ledger's own 'sold' row is the durable record of what a phone sold for
+  // and is never touched by a return, so it survives regardless of what the
+  // phones table does. data.ledger is already loaded by refreshShopData
+  // alongside phones - no extra fetch needed. It's fetched most-recent-first,
+  // so the first 'sold' row seen per phoneId here is already the right one;
+  // a faulty phone can't have been sold again after going faulty (selling
+  // requires status='in_stock'), so "most recent sold row for this phone"
+  // is unambiguously the sale that led to its current faulty state. Same
+  // 5000-row ledger window every other screen already shares - a sale old
+  // enough to fall outside it reads as no match here, same as it would on
+  // the Transactions screen.
+  const lastSoldPriceByPhone = {};
+  (data.ledger||[]).forEach(l=>{
+    if(l.type==='sold' && l.phoneId && !(l.phoneId in lastSoldPriceByPhone)){
+      lastSoldPriceByPhone[l.phoneId] = l.price;
+    }
+  });
   return `
   ${topbar('Faulty & write-offs', shopName(shopId), true)}
   <div class="content">
@@ -3376,7 +3396,7 @@ function screenOwnerFaulty(){
         <div class="imei">IMEI: ${esc(p.imei)} &middot; returned ${esc(p.dateReturned||'-')}</div>
         <div class="imei">Faults: ${esc((p.faultParts||[]).join(', ') || 'not specified')}</div>
         ${p.returnNotes ? `<div class="imei">Note: ${esc(p.returnNotes)}</div>` : ''}
-        ${p.costPrice ? `<div class="imei">Cost ${money(p.costPrice)} &middot; sold for ${money(p.salePrice)}</div>` : ''}
+        ${p.costPrice ? `<div class="imei">Cost ${money(p.costPrice)}${p.id in lastSoldPriceByPhone ? ' &middot; sold for '+money(lastSoldPriceByPhone[p.id]) : ''}</div>` : ''}
         <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
           <button class="link-btn" onclick="markRepaired('${p.id}')">Repaired, back to stock</button>
           <button class="link-btn" style="color:var(--red);" onclick="writeOffPhone('${p.id}')">Write off</button>
