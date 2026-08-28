@@ -182,24 +182,27 @@
   .activity-row .txt{color:var(--text);overflow-wrap:anywhere;min-width:0;}
   .activity-row .time{color:var(--text-faint);white-space:nowrap;margin-left:10px;flex:0 0 auto;}
   /* Wide tables scroll inside their own frame instead of forcing the page
-     body wider. The frame gets a fade at the right edge, shown only while
-     there is actually more to scroll to (toggled by updateTableFades()
-     after every render - see the JS below). Text is never shrunk to fit;
-     the frame scrolls instead. Printing turns this off entirely - see the
-     @media print block, where the real table just prints at full width. */
+     body wider. The frame gets an inset shadow at the right edge, shown
+     only while there is actually more to scroll to (toggled by
+     updateTableFades() after every render - see the JS below). An earlier
+     version used a ::after gradient fading to an opaque var(--card) - its
+     last few px were fully opaque and sat directly over cell content,
+     reading as a white block erasing text rather than a hint. A shadow
+     reads as an edge without covering anything underneath. Text is never
+     shrunk to fit; the frame scrolls instead. Printing turns this off
+     entirely - see the @media print block, where the real table just
+     prints at full width. */
   .table-scroll{
     position:relative;
     overflow-x:auto;
     border-radius:10px;
     background:var(--card);
+    box-shadow:none;
+    transition:box-shadow .15s;
   }
-  .table-scroll::after{
-    content:'';
-    position:absolute;top:0;right:0;bottom:0;width:26px;
-    background:linear-gradient(to right, transparent, var(--card) 78%);
-    pointer-events:none;opacity:0;transition:opacity .15s;
+  .table-scroll.has-overflow{
+    box-shadow:inset -8px 0 8px -8px rgba(0,0,0,0.15);
   }
-  .table-scroll.has-overflow::after{opacity:1;}
   /* Fixed layout so column widths come from the % set on each table's own
      header cells (see each stock-table's <tr> in the JS below), not from
      auto-sizing to content - auto-layout was squeezing Model down to fit
@@ -313,8 +316,16 @@
   table.sheet-table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;table-layout:auto;}
   table.sheet-table th{
     text-align:left;font-weight:700;padding:7px 5px;border:1px solid var(--border);
-    background:#F0F2F6;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;
+    background:#F0F2F6;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;
   }
+  /* No white-space:nowrap here (removed) - on a phone screen, table-layout:
+     auto was sizing every column to its full nowrap header width even
+     though the data underneath (a 1-2 digit count, a currency amount)
+     needs far less, pushing "Counted at end of day" and the main movement
+     table wider than the phone. Letting headers wrap to two lines lets
+     auto-layout shrink those columns to their real content width instead.
+     On A4 print there's enough width per column that headers still render
+     on one line in practice - confirmed via a generated PDF, not assumed. */
   table.sheet-table td{padding:8px 5px;border:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere;}
   table.sheet-table td.num{text-align:center;font-weight:600;white-space:nowrap;}
   table.sheet-table tr.total-row td{background:#F0F2F6;font-weight:700;}
@@ -338,9 +349,8 @@
     table.stock-table{font-size:11px;}
     table.stock-table tr.total-row td{background:#EEE !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     /* On paper every column shows at full width, same as before this fix -
-       the scroll frame and its fade are a screen-only affordance. */
-    .table-scroll{overflow:visible !important;}
-    .table-scroll::after{display:none !important;}
+       the scroll frame and its edge shadow are a screen-only affordance. */
+    .table-scroll{overflow:visible !important;box-shadow:none !important;}
     .card{border:1px solid #ccc;-webkit-print-color-adjust:exact;print-color-adjust:exact;page-break-inside:avoid;}
     .warn-banner,.section-flag,.chip{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     h2{page-break-after:avoid;}
