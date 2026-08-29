@@ -507,6 +507,48 @@ let STAFF_LIST_CACHE = {};       // shopId -> [{id,name}]
 let STAFF_NAME_INDEX = {};       // staffId -> name, built up as staff lists load
 let LAST_SYNC_AT = {};           // shopId -> Date of the last successful refresh
 
+// Signed staff session, set by staff_login and injected into the seven
+// staff RPCs by callRpc. Deliberately NOT on S - navTo()/go() replace S
+// wholesale on every navigation (see AGENTS.md), but a session must survive
+// that, and the outbox auto-resumes on page load before any navigation
+// happens at all. Persisted to localStorage for the same reason.
+const STAFF_SESSION_KEY = 'twstaffsession_v1';
+let STAFF_SESSION_TOKEN = null;
+let STAFF_SESSION_EXPIRES = null;  // display only - see hasValidStaffSession
+let STAFF_SESSION_STAFF_ID = null;
+// Carried alongside the token/staffId specifically so the session-expired
+// banner/re-auth prompt can show the real name after a hard refresh -
+// STAFF_NAME_INDEX is populated only by loadStaffList() (the staff picker
+// screen), which a reload wipes with everything else and nothing in the
+// paused-outbox-resume path re-visits.
+let STAFF_SESSION_NAME = null;
+function loadStaffSession(){
+  try{
+    const raw = window.localStorage.getItem(STAFF_SESSION_KEY);
+    if(!raw) return;
+    const parsed = JSON.parse(raw);
+    STAFF_SESSION_TOKEN = parsed.token || null;
+    STAFF_SESSION_EXPIRES = parsed.expiresAt || null;
+    STAFF_SESSION_STAFF_ID = parsed.staffId || null;
+    STAFF_SESSION_NAME = parsed.staffName || null;
+  }catch(e){}
+}
+function saveStaffSession(token, expiresAt, staffId, staffName){
+  STAFF_SESSION_TOKEN = token;
+  STAFF_SESSION_EXPIRES = expiresAt;
+  STAFF_SESSION_STAFF_ID = staffId;
+  STAFF_SESSION_NAME = staffName;
+  try{ window.localStorage.setItem(STAFF_SESSION_KEY, JSON.stringify({token, expiresAt, staffId, staffName})); }
+  catch(e){}
+}
+// Token presence + staff-id match only - NOT expiresAt. The server (12h
+// sliding window in require_staff_session) is the sole authority on
+// expiry; gating locally on a device clock would let a wrong clock block
+// a perfectly valid session's outbox entries.
+function hasValidStaffSession(staffId){
+  return !!STAFF_SESSION_TOKEN && STAFF_SESSION_STAFF_ID === staffId;
+}
+
 let S = { view:'home' };
 
 function shopName(id){ const s = SHOPS.find(x=>x.id===id); return s ? s.name : id; }
@@ -673,6 +715,14 @@ async function openBizDayAction(shopId, date){
 // the same as a network failure, rather than leaving the caller (and the
 // button) stuck forever.
 const RPC_TIMEOUT_MS = 20000;
+// The seven staff RPCs that take p_session_token server-side (security-8).
+// staff_login and every admin_* RPC are deliberately excluded - injecting
+// a stale/wrong staff token into an admin call would make no sense, and
+// staff_login is how a token is obtained in the first place.
+const STAFF_SESSION_RPCS = new Set([
+  'staff_open_day','staff_receive_stock','staff_sell_phone','staff_return_phone',
+  'staff_submit_eod','staff_close_day','staff_log_expense'
+]);
 async function callRpc(name, params){
   if(!sb){
     SB_UNREACHABLE = true;
@@ -690,8 +740,11 @@ async function callRpc(name, params){
     // with that exact same empty-code shape on purpose, so classification
     // afterward doesn't need to know which of the two actually happened -
     // "no code" always means "no real reply ever arrived."
+    const rpcParams = STAFF_SESSION_RPCS.has(name)
+      ? { ...params, p_session_token: STAFF_SESSION_TOKEN }
+      : params;
     const { data, error } = await Promise.race([
-      sb.rpc(name, params),
+      sb.rpc(name, rpcParams),
       new Promise(resolve => setTimeout(() => resolve({
         data: null,
         error: { message: 'Request timed out', details: '', hint: '', code: '' }
@@ -754,6 +807,22 @@ const OUTBOX_STALLED_THRESHOLD_MS = 45 * 60 * 1000;
 const OUTBOX_MAX_GAP_MS = 90 * 1000;
 
 let OUTBOX = { queue: [], needsAttention: [] };
+// Set to the staff id the head entry needs whenever attemptSendHead finds
+// no valid (or server-rejected) session for it - halts the automatic
+// backoff loop entirely instead of letting the entry burn through it into
+// needsAttention. Cleared on the next successful staff_login.
+let OUTBOX_PAUSED_FOR_SESSION_STAFF_ID = null;
+// Substring match, not exact equality, on require_staff_session's two
+// session-related messages (security-8-staff-rpc-session-check.sql) - a
+// later server-side wording tweak must not silently start treating these
+// as ordinary business refusals and dumping them into needsAttention.
+// Deliberately excludes "Staff member not recognised for this shop." (a
+// deactivated staff row) - re-prompting a PIN that itself now fails to
+// log in would be pointless; that one correctly still falls through to
+// needsAttention below.
+function isSessionAuthError(msg){
+  return !!msg && (msg.indexOf('session has expired') >= 0 || msg.indexOf('does not match the signed-in staff') >= 0);
+}
 let outboxTimer = null;
 let outboxSending = false;
 
@@ -871,6 +940,18 @@ async function attemptSendHead(){
   outboxSending = true;
   if(outboxTimer){ clearTimeout(outboxTimer); outboxTimer = null; }
 
+  if(STAFF_SESSION_RPCS.has(head.rpcName) && !hasValidStaffSession(head.params.p_staff_id)){
+    // No network attempt at all - we already know it would fail. Entry
+    // stays at the head of the queue untouched (idempotency key intact,
+    // attemptCount/attemptMs untouched), and scheduleNextOutboxAttempt is
+    // skipped below so the automatic loop actually stops instead of
+    // retrying into the same wall every backoff interval.
+    OUTBOX_PAUSED_FOR_SESSION_STAFF_ID = head.params.p_staff_id;
+    outboxSending = false;
+    refreshOutboxUI();
+    return;
+  }
+
   const now = Date.now();
   const gap = now - (head.lastAttemptStartedAt || head.queuedAt);
   head.attemptMs = (head.attemptMs || 0) + Math.min(Math.max(gap, 0), OUTBOX_MAX_GAP_MS);
@@ -887,8 +968,16 @@ async function attemptSendHead(){
     res = { ok:false, error: String((e && e.message) || e), noReply:true };
   }
 
+  const sessionAuthError = !res.noReply && isSessionAuthError(res.error);
+
   if(res.ok){
     OUTBOX.queue.shift();
+  } else if(sessionAuthError){
+    // A real reply, but an auth problem, not a business refusal - same
+    // treatment as the local pre-check above: stays at the head of the
+    // queue, idempotency key intact, paused instead of falling into
+    // needsAttention.
+    OUTBOX_PAUSED_FOR_SESSION_STAFF_ID = head.params.p_staff_id;
   } else if(!res.noReply){
     // A real reply arrived this time - a genuine refusal (a stale
     // precondition or any other real server answer), not another silent
@@ -913,14 +1002,15 @@ async function attemptSendHead(){
   // cache instead of a stale network retry - the same failure this whole
   // phase exists to prevent, just reached a different way. Scoped to the
   // shop currently on screen, not the entry's shop unconditionally - no
-  // point refreshing data nobody is looking at right now.
-  if(!res.noReply && head.params && head.params.p_shop_id === S.shopId){
+  // point refreshing data nobody is looking at right now. Skipped for a
+  // session-auth pause - nothing about this shop's data actually changed.
+  if(!res.noReply && !sessionAuthError && head.params && head.params.p_shop_id === S.shopId){
     await refreshShopData(S.shopId);
   }
 
   saveOutbox();
   outboxSending = false;
-  scheduleNextOutboxAttempt();
+  if(!OUTBOX_PAUSED_FOR_SESSION_STAFF_ID) scheduleNextOutboxAttempt();
   refreshOutboxUI();
 }
 
@@ -1048,6 +1138,38 @@ function outboxNeedsAttentionBanner(){
       </div>
     </div>`).join('')}
   </div>`;
+}
+// STAFF_SESSION_NAME (persisted alongside the token/staffId, survives a
+// reload) only applies when it's actually the paused entry's own staff -
+// STAFF_NAME_INDEX only knows names for whoever's staff list has loaded
+// this page load, so it's the fallback, not "Staff" directly.
+function outboxSessionExpiredStaffName(){
+  const staffId = OUTBOX_PAUSED_FOR_SESSION_STAFF_ID;
+  if(!staffId) return 'Staff';
+  if(STAFF_SESSION_STAFF_ID === staffId && STAFF_SESSION_NAME) return STAFF_SESSION_NAME;
+  return STAFF_NAME_INDEX[staffId] || 'Staff';
+}
+function outboxSessionExpiredBanner(){
+  if(!OUTBOX_PAUSED_FOR_SESSION_STAFF_ID) return '';
+  const name = outboxSessionExpiredStaffName();
+  const n = OUTBOX.queue.length;
+  return `<div class="outbox-attention">
+    <div class="outbox-attention-head">Your session has expired. Sign in again as ${esc(name)} to send ${n} waiting ${n===1?'item':'items'}.</div>
+    <button class="btn btn-full-center" onclick="outboxSessionExpiredSignInClicked()">Sign in again</button>
+  </div>`;
+}
+// No-arg handler, not inline args - esc() HTML-encodes an apostrophe to
+// &#39;, which the HTML attribute parser decodes back to a literal ' before
+// the onclick string ever reaches the JS parser, so a staff name containing
+// one would still break out of the single-quoted navTo() args. Reading
+// state directly here sidesteps the whole problem.
+function outboxSessionExpiredSignInClicked(){
+  const staffId = OUTBOX_PAUSED_FOR_SESSION_STAFF_ID;
+  if(!staffId) return;
+  const name = outboxSessionExpiredStaffName();
+  const head = OUTBOX.queue[0];
+  const shopId = (head && head.params && head.params.p_shop_id) || S.shopId;
+  navTo('staffPinEntry', {shopId, pendingStaffId: staffId, pendingStaffName: name});
 }
 // Called whenever the outbox's own state changes in the background (an
 // attempt resolved, a stalled flag flipped) so the bar/banner/per-screen
@@ -1486,7 +1608,7 @@ function render(){
     endShopPresence();
   }
   try{
-    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxSessionExpiredBanner() + outboxWaitingBar() + viewFor(S.view) + (MENU_OPEN ? renderMenuPanel() : '');
   }catch(e){
     showFatal(e, 'Something went wrong drawing this screen.');
   }
@@ -1897,8 +2019,18 @@ async function submitStaffPin(){
     }
     S.staffId = data[0].id;
     S.staffName = data[0].name;
+    saveStaffSession(data[0].session_token, data[0].expires_at, data[0].id, data[0].name);
     await loadShopData(S.shopId);
     navTo('staffMenu');
+    // Covers both a fresh sign-in and re-entry after an outbox session
+    // pause - if this staff member isn't the one the paused head entry
+    // needs, attemptSendHead just re-pauses with the correct name. After
+    // navTo(), not alongside loadShopData() - that ran concurrently with
+    // this while still on the PIN screen under CRITICAL_FLOW_IN_PROGRESS,
+    // for no benefit (staffMenu doesn't need the outbox to have resolved
+    // to render).
+    OUTBOX_PAUSED_FOR_SESSION_STAFF_ID = null;
+    attemptSendHead();
   }catch(e){
     // Same trade-off as above.
     RENDER_PENDING = false;
@@ -2215,8 +2347,17 @@ async function confirmSale(){
         // unconditionally for any new sale, so nothing later can ever
         // collide with what's now queued under this one.
         enqueueOutbox({ rpcName: 'staff_sell_phone', params, localDate: date, label: `Sale - ${modelLabel} (${shopName(S.shopId)})` });
+        // Stays locked, not unlockBtn - the sale is already queued, there is
+        // nothing left to confirm on this screen. Repeating the tap would
+        // just queue duplicate entries under fresh confirmSale() calls (see
+        // the staff_sell_phone idempotency-key investigation - this screen
+        // has no its-own queued check, only screenSalePrice()'s render-time
+        // notice swap, which the no-render trade-off right below skips).
+        const btn = document.getElementById('saleConfirmBtn');
+        if(btn) btn.textContent = 'Queued - waiting to send';
+      } else {
+        unlockBtn('saleConfirmBtn', label);
       }
-      unlockBtn('saleConfirmBtn', label);
       // Trade-off: clears without rendering - safe only because this screen
       // shows no live SHOP_CACHE data. Revisit if that changes.
       RENDER_PENDING = false;
@@ -2374,6 +2515,12 @@ function screenReturnTopup(){
   // >= 0; the server enforces >= 0, not this specific arithmetic.
   const suggested = Math.max(0, (replacement.listPrice||0) - (selectedPhone.salePrice||0));
   const queued = findQueuedOutboxEntry('staff_return_phone', p => p.p_phone_id === selectedPhone.id);
+  // Covers both outcomes staff_return_phone actually rejects this for -
+  // 'swap' and 'swap_topup' - since confirmReturn() decides between them
+  // from the top-up amount entered right here, not up front. Blocked
+  // client-side, not left to the server's raise: offline, that raise would
+  // otherwise only surface on outbox replay, after the customer has left.
+  const noPrice = replacement.listPrice===null || replacement.listPrice===undefined;
   return `
   ${topbar(shopName(S.shopId), 'Swap - top-up', true)}
   <div class="content">
@@ -2381,12 +2528,15 @@ function screenReturnTopup(){
       <div class="imei">Returning: ${esc(selectedPhone.model)} &middot; sold for ${money(selectedPhone.salePrice)}</div>
       <div class="imei">Replacement: ${esc(replacement.model)}${replacement.description ? ' - '+esc(replacement.description) : ''} &middot; priced at ${money(replacement.listPrice)}</div>
     </div>
+    ${noPrice ? `<div class="warn-banner">This replacement has no price set. Pick a different phone, or ask the owner to set a price before swapping.</div>` : ''}
     <div class="field">
       <label>Top-up to collect ($, 0 if this is an even swap)</label>
-      <input type="tel" inputmode="decimal" id="topupInput" placeholder="e.g. 50" value="${returnTopupAmount!=null ? returnTopupAmount : suggested}" ${queued?'disabled':''}>
+      <input type="tel" inputmode="decimal" id="topupInput" placeholder="e.g. 50" value="${returnTopupAmount!=null ? returnTopupAmount : suggested}" ${(queued||noPrice)?'disabled':''}>
     </div>
     <div id="returnErr"></div>
-    ${queued ? queuedActionNotice(queued) : `<button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm swap</button>`}
+    ${queued ? queuedActionNotice(queued)
+      : noPrice ? `<button class="btn btn-primary btn-full-center" disabled>Confirm swap</button>`
+      : `<button class="btn btn-primary btn-full-center" id="returnConfirmBtn" onclick="confirmReturn()">Confirm swap</button>`}
   </div>`;
 }
 function screenReturnRefundAmount(){
@@ -2844,7 +2994,7 @@ async function finishReceiving(){
       }
       unlockBtn('receiveFinishBtn', label);
       RENDER_PENDING = false;
-      app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+      app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxSessionExpiredBanner() + outboxWaitingBar() + `
         ${topbar(shopName(S.shopId), '', true)}
         <div class="content">
           <div class="err" style="margin-bottom:14px;">${esc(res.error)}</div>
@@ -2865,7 +3015,7 @@ async function finishReceiving(){
     await refreshShopData(S.shopId);
     await loadShopsAndModels(); // picks up any model staff just typed as new
     RENDER_PENDING = false;
-    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+    app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxSessionExpiredBanner() + outboxWaitingBar() + `
       ${topbar(shopName(S.shopId), '', false)}
       <div class="content">
         <div class="success-box"><div class="check">&#10003;</div><div class="msg">${totalAdded} phone(s) added to stock.</div></div>
@@ -3008,7 +3158,7 @@ function showSuccessThen(msg, nextView){
   RENDER_PENDING = false;
   const app = document.getElementById('app');
   const failed = !!SAVE_ERROR;
-  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxSessionExpiredBanner() + outboxWaitingBar() + `
     ${topbar(shopName(S.shopId), '', false)}
     <div class="content">
       ${failed ? notSavedBox('That entry') : `<div class="success-box">
@@ -4503,7 +4653,7 @@ async function saveSettings(){
 }
 function showSuccessThenGeneric(msg, nextView){
   const app = document.getElementById('app');
-  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxWaitingBar() + `
+  app.innerHTML = scriptLoadFailedBanner() + offlineBanner() + saveErrorBanner() + staleVersionBanner() + outboxLossWarning() + outboxNeedsAttentionBanner() + outboxSessionExpiredBanner() + outboxWaitingBar() + `
     ${topbar('Admin dashboard','',false)}
     <div class="content">
       <div class="success-box"><div class="check">&#10003;</div><div class="msg">${esc(msg)}</div></div>
@@ -4513,6 +4663,9 @@ function showSuccessThenGeneric(msg, nextView){
 
 async function init(){
   try{
+    // Session first - attemptSendHead's session check needs it in memory
+    // before the outbox's own auto-resume (right below) can fire.
+    loadStaffSession();
     // Resume the outbox before anything else - independent of sb/network,
     // so a queued entry from before the last reload starts trying again
     // without any user action.
