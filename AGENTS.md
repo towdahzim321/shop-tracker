@@ -163,6 +163,21 @@
   patch in the fresher data alongside the error). Each call site carries a 
   one-line comment noting this.
 
+## Client state across navigation
+- `navTo()`/`go()` (index.html) replace `S` entirely on every navigation, 
+  keeping only `shopId`/`staffId`/`staffName` (see `go()`'s `keep` list) - 
+  anything else set on `S` right before a `navTo()` call is silently wiped 
+  the instant that navigation runs. A flow confined to one screen (e.g. 
+  reason-picking, which only ever calls `render()`, never `navTo()`) can 
+  get away with using `S` fields for its state; any flow spanning multiple 
+  screens cannot - its state has to live in a plain top-level `let` 
+  variable instead, the same pattern `selectedPhone`/`returnIdemKey`/ 
+  `saleIdemKey` already use. This cost a real bug in the returns flow 
+  (the swap/refund screens' accumulated state - including reason/fault- 
+  parts/notes, which had silently relied on never crossing a `navTo()` 
+  boundary before - was wiped mid-flow until it was all moved off `S`) and 
+  will recur on the next multi-step feature if not checked for up front.
+
 ## Vendored dependencies (client)
 - `supabase-js.2.112.4.js` (repo root) is `@supabase/supabase-js@2.112.4`'s 
   published UMD browser bundle (the same file its own `package.json` 
