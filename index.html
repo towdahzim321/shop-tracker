@@ -209,7 +209,12 @@
      the numeric columns' nowrap headers, which is backwards: the model
      name is the information here, a per-shop count or Qty is 1-2 digits. */
   table.stock-table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;table-layout:fixed;}
-  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);}
+  /* overflow-wrap:anywhere is a defensive backstop, not load-bearing for
+     the all-shops stock table's headers - those are short enough now
+     ("Blw 1"/"Blw 2", see renderStockByModelAll) to fit their column at
+     every measured width (340-430px) without it. Kept on in case some
+     other stock-table header ever runs long. */
+  table.stock-table th{text-align:left;color:var(--text-soft);font-weight:600;padding:6px 4px;border-bottom:1.5px solid var(--border);overflow-wrap:anywhere;}
   table.stock-table td{padding:8px 4px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;}
   /* Caps long model/colour/storage text (e.g. "Galaxy A55 - Black, 128GB")
      at 2 lines instead of wrapping to 5-6; the full text is still on this
@@ -3557,8 +3562,15 @@ function renderStockByModelAll(allData){
   const threshold = (CONFIG.lowStockThreshold !== undefined) ? CONFIG.lowStockThreshold : DEFAULT_LOW_STOCK;
   const shopTotals = SHOPS.map(sh=>keys.reduce((a,k)=>a+(byModel[k].perShop[sh.id]||0),0));
   const grandTotal = keys.reduce((a,k)=>a+byModel[k].total,0);
+  // Abbreviated, not resized - three rounds of shrinking Model to make
+  // "Bulawayo 1"/"Bulawayo 2" fit just moved the shortage onto the model
+  // name instead, which matters far more than the header text. "Blw 1"/
+  // "Blw 2" are short enough that every column comfortably fits its own
+  // header AND a full model name (measured 340-430px), so there's finally
+  // width to spare - see the legend line below the table for what they mean.
+  const legend = `<div style="font-size:11px;color:var(--text-faint);margin-top:8px;">Blw 1 = ${esc(shopName('bulawayo1'))} &middot; Blw 2 = ${esc(shopName('bulawayo2'))}</div>`;
   return `<div class="table-scroll"><table class="stock-table">
-    <tr><th style="width:52%;">Model</th>${SHOPS.map(sh=>`<th>${esc(sh.name.split(' ')[0])}${sh.id==='bulawayo2'?' 2':(sh.id==='bulawayo1'?' 1':'')}</th>`).join('')}<th>Total</th></tr>
+    <tr><th style="width:46%;">Model</th>${SHOPS.map(sh=>`<th>${sh.id==='bulawayo1'?'Blw 1':sh.id==='bulawayo2'?'Blw 2':esc(sh.name.split(' ')[0])}</th>`).join('')}<th style="width:12%;">Total</th></tr>
     ${keys.map(k=>`<tr>
       <td><div class="clamp-2" title="${esc(k)}">${esc(k)}</div>${byModel[k].total<=threshold?'<span class="chip chip-red">Re-up</span>':''}</td>
       ${SHOPS.map(sh=>`<td>${byModel[k].perShop[sh.id]||0}</td>`).join('')}
@@ -3569,7 +3581,7 @@ function renderStockByModelAll(allData){
       ${shopTotals.map(t=>`<td>${t}</td>`).join('')}
       <td>${grandTotal}</td>
     </tr>
-  </table></div>`;
+  </table></div>${legend}`;
 }
 // Valuation for ONE shop's in-stock phones. Unlike renderStockByModel's
 // (p.costPrice||0), a null cost price here is excluded from `value` and
