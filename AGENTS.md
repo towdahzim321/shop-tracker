@@ -186,6 +186,32 @@
   boundary before - was wiped mid-flow until it was all moved off `S`) and 
   will recur on the next multi-step feature if not checked for up front.
 
+## Session scope
+- The staff session persisted to `localStorage` (`STAFF_SESSION_TOKEN`/
+  `STAFF_SESSION_STAFF_ID`, restored by `loadStaffSession()` on every page 
+  load) is an outbox-resume mechanism only, not a "stay signed in" one - 
+  its sole consumer is `attemptSendHead()`'s `hasValidStaffSession()` 
+  check, which validates a previously-queued write's own saved 
+  `p_staff_id` before replaying it. It is never written onto `S`.
+- `S.staffId` and `S.shopId` are in-memory only and do not survive a page 
+  reload - `S` starts as `{view:'home'}` on every fresh load, and nothing 
+  restores either field from storage. `S.staffId` is set to a real value 
+  in exactly one place, `submitStaffPin()`'s success branch; every other 
+  assignment sets it to `null`. So a reload always requires picking the 
+  shop and re-entering the PIN before any screen that reads `S.staffId` 
+  can be reached - there is no path that resumes straight into a shop 
+  screen off the restored localStorage session.
+- This is why `refreshShopData()`'s two session-gated staff RPCs 
+  (`staff_recent_daily_logs`, `staff_today_expenses` - see security-10) 
+  can safely read `S.staffId` directly: `pollTick()`, the only automatic 
+  caller of `refreshShopData()`, gates on `S.shopId` being truthy 
+  (`S.shopId ? [S.shopId] : []`), and `S.shopId` is equally unrestored 
+  after a reload - so no automatic or background path reaches these RPCs 
+  before a fresh PIN entry has already set `S.staffId` correctly. Changing 
+  `pollTick()`'s gate, or restoring `S.shopId` (or `S.staffId`) from 
+  storage on load, would break this invariant and needs the same 
+  audit redone before shipping.
+
 ## Vendored dependencies (client)
 - `supabase-js.2.112.4.js` (repo root) is `@supabase/supabase-js@2.112.4`'s 
   published UMD browser bundle (the same file its own `package.json` 

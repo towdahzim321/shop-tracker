@@ -514,9 +514,17 @@ let LAST_SYNC_AT = {};           // shopId -> Date of the last successful refres
 
 // Signed staff session, set by staff_login and injected into the seven
 // staff RPCs by callRpc. Deliberately NOT on S - navTo()/go() replace S
-// wholesale on every navigation (see AGENTS.md), but a session must survive
-// that, and the outbox auto-resumes on page load before any navigation
-// happens at all. Persisted to localStorage for the same reason.
+// wholesale on every navigation (see AGENTS.md). Persisted to localStorage
+// and restored by loadStaffSession() on every page load, but that
+// restoration is NOT a "stay signed in" mechanism - it exists solely so
+// attemptSendHead() can validate a queued outbox write's session before
+// replaying it, on page load, before any navigation or PIN entry happens.
+// It does not touch S. S.staffId (and S.shopId) are never restored from
+// storage and start undefined on every fresh load - the only place
+// S.staffId is ever set to a real value is submitStaffPin()'s success
+// branch, so a reload always requires re-entering the PIN before any
+// screen that reads S.staffId can be reached. See AGENTS.md's "Session
+// scope" section.
 const STAFF_SESSION_KEY = 'twstaffsession_v1';
 let STAFF_SESSION_TOKEN = null;
 let STAFF_SESSION_EXPIRES = null;  // display only - see hasValidStaffSession
