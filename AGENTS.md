@@ -24,6 +24,14 @@
 - Staff authenticate via `pin_hash` (bcrypt, NOT NULL). There is no 
   plaintext `pin` column and never was — do not propose dual-mode login 
   or backfill scripts for this.
+- Staff session tokens are mandatory server-side as of 30 Aug 2026 
+  (`supabase-schema-security-9-require-staff-session-mandatory.sql`, 
+  applied to both production and staging). `require_staff_session` has no 
+  null-token fallback — a call with `p_session_token` omitted raises 
+  rather than trusting `p_staff_id` directly. `p_staff_id` must also match 
+  the session's own `staff_id`; `null` is rejected the same as a wrong id, 
+  closing an attribution-nulling gap alongside the main fix. Do not 
+  reintroduce either fallback without re-reading that migration's header.
 
 ## Function signature changes
 - Never use CREATE OR REPLACE FUNCTION when the parameter list changes — 
