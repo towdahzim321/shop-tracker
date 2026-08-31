@@ -3827,7 +3827,16 @@ function buildStockSheet(shopId, date){
   const open = countPlace(openState, 'stock');
   const close = countPlace(closeState, 'stock');
   const dayEvents = events.filter(e=>e.ts>=sTs && e.ts<=eTs);
-  const salesQty={}, salesAmt={}, recv={}, retStock={}, retFaulty={}, rep={}, off={}, swapOut={};
+  const salesQty={}, salesAmt={}, recv={}, retStock={}, retFaulty={}, rep={}, off={}, swapOut={}, swapTopup={};
+  // swap_topup.phoneId is the replacement phone - the same id swap_out uses
+  // for its own phoneId (extra.linkedPhoneId points at the original returned
+  // phone instead, and isn't what this join needs). Build the lookup first
+  // so the swap_out branch below can attribute the actual cash collected to
+  // the row it already prints "swapped out" on.
+  const topupByPhone = {};
+  dayEvents.forEach(e=>{
+    if(e.type==='swap_topup' && e.phoneId) topupByPhone[e.phoneId] = (topupByPhone[e.phoneId]||0) + (e.price||0);
+  });
   dayEvents.forEach(e=>{
     const k = sheetKey(e);
     if(e.type==='sold'){ salesQty[k]=(salesQty[k]||0)+1; salesAmt[k]=(salesAmt[k]||0)+(e.price||0); }
@@ -3837,31 +3846,44 @@ function buildStockSheet(shopId, date){
     else if(e.type==='repaired'){ rep[k]=(rep[k]||0)+1; }
     else if(e.type==='written_off'){ off[k]=(off[k]||0)+1; }
     // swap_out: the unit genuinely left the shelf, so it counts as a sale
-    // for the opening+received-sales=closing math same as an ordinary
-    // sale would - but never into salesAmt. What actually moved in cash
-    // (0 for an even swap, the top-up for a priced one) is a separate
+    // for the opening+received+returns-sales=closing math same as an
+    // ordinary sale would - but never into salesAmt. What actually moved in
+    // cash (0 for an even swap, the top-up for a priced one) is a separate
     // swap_topup event entirely, surfaced on the EOD screen instead -
     // folding it in here would misrepresent this model's revenue.
-    else if(e.type==='swap_out'){ swapOut[k]=(swapOut[k]||0)+1; salesQty[k]=(salesQty[k]||0)+1; }
+    else if(e.type==='swap_out'){ swapOut[k]=(swapOut[k]||0)+1; salesQty[k]=(salesQty[k]||0)+1; swapTopup[k]=(swapTopup[k]||0)+(topupByPhone[e.phoneId]||0); }
   });
   const seen = {};
   [open, close, salesQty, recv, retStock, retFaulty, rep, off, swapOut].forEach(m=>Object.keys(m).forEach(k=>{ seen[k]=true; }));
   const rows = Object.keys(seen).sort().map(k=>{
-    // Goods received has its own column. Comments carry only the movements that
-    // would otherwise make opening + received - sales fail to equal closing.
+    // Returns = retStock + retFaulty: every 'returned' event for this model
+    // today, whichever shelf it landed on - all four return outcomes
+    // (return/swap/swap_topup/refund) raise this same event on the original
+    // phone. Repaired units are a separate shelf move (an older return,
+    // fixed today), not a customer return today, so they stay out of this
+    // column - only "+N repaired" in the comment covers them.
+    // Because of that, opening+received+returns-sales=closing only holds on
+    // a day with no repairs; the exact identity (this row's closing is
+    // computed independently via replayState, so this is what keeps this
+    // column internally consistent with it, not what produces closing) is
+    //   opening + received + returns - sales - (retFaulty - repaired) = closing
+    // i.e. "faulty" nets today's faulty-shelf arrivals against today's
+    // repairs of (possibly older) faulty stock of the same model.
+    const returns = (retStock[k]||0) + (retFaulty[k]||0);
     const notes = [];
     if(retStock[k]) notes.push('+' + retStock[k] + ' returned to stock');
     if(rep[k]) notes.push('+' + rep[k] + ' repaired');
     if(retFaulty[k]) notes.push('-' + retFaulty[k] + ' to faulty shelf');
     if(off[k]) notes.push('-' + off[k] + ' written off');
-    if(swapOut[k]) notes.push(swapOut[k] + ' swapped out (no cash)');
-    return {model:k, opening:open[k]||0, received:recv[k]||0, sales:salesQty[k]||0, closing:close[k]||0, amount:salesAmt[k]||0, notes:notes.join(', ')};
-  }).filter(r=> r.opening || r.closing || r.sales || r.received || r.notes);
+    if(swapOut[k]) notes.push(swapOut[k] + ' swapped out' + (swapTopup[k] ? ' (top-up ' + money(swapTopup[k]) + ')' : ' (no cash)'));
+    return {model:k, opening:open[k]||0, received:recv[k]||0, returns, sales:salesQty[k]||0, closing:close[k]||0, amount:salesAmt[k]||0, notes:notes.join(', ')};
+  }).filter(r=> r.opening || r.closing || r.sales || r.received || r.returns || r.notes);
   return {
     rows,
     totals: {
       opening:  rows.reduce((a,r)=>a+r.opening,0),
       received: rows.reduce((a,r)=>a+r.received,0),
+      returns:  rows.reduce((a,r)=>a+r.returns,0),
       sales:    rows.reduce((a,r)=>a+r.sales,0),
       closing:  rows.reduce((a,r)=>a+r.closing,0),
       amount:   rows.reduce((a,r)=>a+r.amount,0)
@@ -3918,14 +3940,15 @@ function screenStockSheet(){
     <div class="table-scroll">
     <table class="sheet-table">
       <tr>
-        <th>Date</th><th>Model</th><th>Opening</th><th>Goods received</th><th>Sales</th><th>Closing</th><th>Amount</th><th style="width:22%;">Comments</th>
+        <th>Date</th><th>Model</th><th>Opening</th><th>Goods received</th><th>Returns</th><th>Sales</th><th>Closing</th><th>Amount</th><th style="width:22%;">Comments</th>
       </tr>
-      ${sheet.rows.length===0 ? `<tr><td colspan="8" style="text-align:center;color:var(--text-faint);padding:22px;">No stock movement recorded on this date.</td></tr>` : sheet.rows.map(r=>`
+      ${sheet.rows.length===0 ? `<tr><td colspan="9" style="text-align:center;color:var(--text-faint);padding:22px;">No stock movement recorded on this date.</td></tr>` : sheet.rows.map(r=>`
       <tr>
         <td>${esc(date.slice(5))}</td>
         <td>${esc(r.model)}</td>
         <td class="num">${r.opening}</td>
         <td class="num">${r.received ? '+' + r.received : '-'}</td>
+        <td class="num">${r.returns ? '+' + r.returns : '-'}</td>
         <td class="num">${r.sales}</td>
         <td class="num">${r.closing}</td>
         <td class="num">${r.amount ? money(r.amount) : '-'}</td>
@@ -3935,6 +3958,7 @@ function screenStockSheet(){
         <td></td><td>TOTAL</td>
         <td class="num">${sheet.totals.opening}</td>
         <td class="num">${sheet.totals.received}</td>
+        <td class="num">${sheet.totals.returns}</td>
         <td class="num">${sheet.totals.sales}</td>
         <td class="num">${sheet.totals.closing}</td>
         <td class="num">${money(sheet.totals.amount)}</td>
@@ -4659,7 +4683,7 @@ function screenOwnerDayReport(){
     <div class="card">
       ${events.length===0 ? '<div class="empty">No transactions on this date.</div>' : events.map(e=>`
         <div class="activity-row">
-          <div class="txt"><span class="chip ${e.type==='sold'?'chip-red':(e.type==='returned'?'chip-gray':'chip-green')}">${typeLabel(e.type)}</span> ${esc(e.model)}${e.description?' - '+esc(e.description):''} &middot; IMEI ${esc(e.imei)}${e.price?' &middot; '+money(e.price):''}${e.faultParts&&e.faultParts.length?' &middot; faults: '+esc(e.faultParts.join(', ')):''}</div>
+          <div class="txt"><span class="chip ${e.type==='sold'?'chip-red':(e.type==='returned'?'chip-gray':'chip-green')}">${typeLabel(e.type)}</span> ${esc(e.model)}${e.description?' - '+esc(e.description):''}${e.imei?' &middot; IMEI '+esc(e.imei):''}${e.price?' &middot; '+money(e.price):''}${e.faultParts&&e.faultParts.length?' &middot; faults: '+esc(e.faultParts.join(', ')):''}</div>
           <div class="time">${new Date(e.ts).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
         </div>
       `).join('')}
