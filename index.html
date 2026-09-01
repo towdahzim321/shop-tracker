@@ -1655,6 +1655,34 @@ function updateTableFades(){
 document.addEventListener('scroll', function(e){
   if(e.target && e.target.classList && e.target.classList.contains('table-scroll')) updateTableFadeFor(e.target);
 }, true);
+// Delegated dispatcher for the handful of buttons whose action needs
+// staff/shop/model free text as an argument (name, brand). Text used to be
+// interpolated straight into onclick="fn('...')", which esc() cannot make
+// safe there - the HTML parser decodes &#39; back to ' before that
+// attribute value is compiled as the handler's JS source, so escaped text
+// still breaks out of the string literal. Reading it from a data-* attribute
+// instead means it's never compiled as code: dataset.x is just a decoded
+// string, handed to the real function as a plain argument. One listener
+// here (not one per render) survives every render() rebuild of #app, same
+// reasoning as the scroll listener above.
+const DATA_CLICK_ACTIONS = {
+  menuTapStaff: ds => menuTapStaff(ds.id, ds.name),
+  staffPinEntry: ds => navTo('staffPinEntry', {pendingStaffId: ds.id, pendingStaffName: ds.name}),
+  pickModel: ds => pickModel(ds.name),
+  renameShopTarget: ds => { S.renameShopTarget = {id: ds.id, name: ds.name}; render(); },
+  closeShopAction: ds => closeShopAction(ds.id, ds.name),
+  renameModelTarget: ds => { S.renameModelTarget = {id: ds.id, name: ds.name}; render(); },
+  setBrandTarget: ds => { S.setBrandTarget = {id: ds.id, name: ds.name, brand: ds.brand || ''}; render(); },
+  resetPinStaff: ds => { S.resetPinStaff = {id: ds.id, name: ds.name}; render(); },
+  deactivateStaff: ds => deactivateStaff(ds.id, ds.name),
+  confirmWipeShop: ds => confirmWipeShop(ds.id, ds.name)
+};
+document.addEventListener('click', function(e){
+  const el = e.target.closest('[data-action]');
+  if(!el) return;
+  const action = DATA_CLICK_ACTIONS[el.dataset.action];
+  if(action) action(el.dataset);
+});
 function showFatal(err, headline){
   const app = document.getElementById('app');
   const msg = (err && err.message) ? err.message : String(err || 'Unknown problem');
@@ -1873,8 +1901,8 @@ function renderMenuPanel(){
     const list = getMenuStaffList(curShop);
     const rows = list.length===0 ? `<div class="empty" style="padding:10px 4px;">No staff on record for this shop yet.</div>` : list.map(s=>{
       const isMe = isStaffSession && s.id===S.staffId;
-      const onclickAttr = isStaffSession ? ` onclick="menuTapStaff('${esc(s.id)}','${esc(s.name).replace(/'/g,"\\'")}')"` : '';
-      return `<div class="menu-row${isMe?' current':''}"${onclickAttr} style="${isStaffSession?'':'cursor:default;'}">
+      const actionAttr = isStaffSession ? ` data-action="menuTapStaff" data-id="${esc(s.id)}" data-name="${esc(s.name)}"` : '';
+      return `<div class="menu-row${isMe?' current':''}"${actionAttr} style="${isStaffSession?'':'cursor:default;'}">
         <span>${esc(s.name)}</span>${isMe?'<span class="menu-tick">&#10003;</span>':''}
       </div>`;
     }).join('');
@@ -1989,7 +2017,7 @@ function screenStaffPicker(){
   <div class="content">
     ${!list ? `<p class="lead">Loading staff list...</p>` :
       list.length===0 ? `<div class="empty">No staff set up for this shop yet. Ask the owner to add you under Settings.</div>` :
-      list.map(s=>`<button class="btn btn-outline" onclick="navTo('staffPinEntry',{pendingStaffId:'${esc(s.id)}',pendingStaffName:'${esc(s.name)}'})">${esc(s.name)}</button>`).join('')}
+      list.map(s=>`<button class="btn btn-outline" data-action="staffPinEntry" data-id="${esc(s.id)}" data-name="${esc(s.name)}">${esc(s.name)}</button>`).join('')}
   </div>`;
 }
 async function loadStaffList(shopId){
@@ -2832,7 +2860,7 @@ function screenReceiveModelPick(){
   </div>`;
 }
 function modelOptBtn(m){
-  return `<div class="reason-btn model-opt" data-m="${esc(m.nameKey)}" onclick="pickModel('${esc(m.name).replace(/'/g,"\\'")}')">${esc(m.name)}</div>`;
+  return `<div class="reason-btn model-opt" data-m="${esc(m.nameKey)}" data-action="pickModel" data-name="${esc(m.name)}">${esc(m.name)}</div>`;
 }
 function attachModelFilter(){
   const input = document.getElementById('modelSearch');
@@ -4166,8 +4194,8 @@ function screenOwnerSettings(){
           ${s.active===false ? '<span class="chip chip-gray">Closed</span>' : '<span class="chip chip-green">Open</span>'}
         </div>
         <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
-          <button class="link-btn" onclick="S.renameShopTarget={id:'${esc(s.id)}',name:'${esc(s.name).replace(/'/g,"\\'")}'};render();">Rename</button>
-          ${s.active!==false ? `<button class="link-btn" style="color:var(--red);" onclick="closeShopAction('${esc(s.id)}','${esc(s.name).replace(/'/g,"\\'")}')">Close</button>` : ''}
+          <button class="link-btn" data-action="renameShopTarget" data-id="${esc(s.id)}" data-name="${esc(s.name)}">Rename</button>
+          ${s.active!==false ? `<button class="link-btn" style="color:var(--red);" data-action="closeShopAction" data-id="${esc(s.id)}" data-name="${esc(s.name)}">Close</button>` : ''}
         </div>
       </div>`).join('')}
 
@@ -4190,8 +4218,8 @@ function screenOwnerSettings(){
           </div>
           <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
             ${m.id ? `
-              <button class="link-btn" onclick="S.renameModelTarget={id:'${esc(m.id)}',name:'${esc(m.name).replace(/'/g,"\\'")}'};render();">Rename</button>
-              <button class="link-btn" onclick="S.setBrandTarget={id:'${esc(m.id)}',name:'${esc(m.name).replace(/'/g,"\\'")}',brand:'${esc(m.brand||'').replace(/'/g,"\\'")}'};render();">Set brand</button>
+              <button class="link-btn" data-action="renameModelTarget" data-id="${esc(m.id)}" data-name="${esc(m.name)}">Rename</button>
+              <button class="link-btn" data-action="setBrandTarget" data-id="${esc(m.id)}" data-name="${esc(m.name)}" data-brand="${esc(m.brand||'')}">Set brand</button>
             ` : `<span style="color:var(--text-faint);">Not editable until connected</span>`}
           </div>
         </div>`).join('')}
@@ -4208,8 +4236,8 @@ function screenOwnerSettings(){
           ${s.active ? '<span class="chip chip-green">Active</span>' : '<span class="chip chip-gray">Deactivated</span>'}
         </div>
         <div style="margin-top:8px;font-size:13px;display:flex;gap:16px;">
-          <button class="link-btn" onclick="S.resetPinStaff={id:'${esc(s.id)}',name:'${esc(s.name)}'};render();">Reset PIN</button>
-          ${s.active ? `<button class="link-btn" style="color:var(--red);" onclick="deactivateStaff('${esc(s.id)}','${esc(s.name)}')">Deactivate</button>` : ''}
+          <button class="link-btn" data-action="resetPinStaff" data-id="${esc(s.id)}" data-name="${esc(s.name)}">Reset PIN</button>
+          ${s.active ? `<button class="link-btn" style="color:var(--red);" data-action="deactivateStaff" data-id="${esc(s.id)}" data-name="${esc(s.name)}">Deactivate</button>` : ''}
         </div>
       </div>`).join(''))}
 
@@ -4293,7 +4321,7 @@ function screenWipeShop(){
     </div>
     <div id="wipeLockState" style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Locked &mdash; waiting for the live record count.</div>
     <div id="wipeErr"></div>
-    <button class="btn btn-full-center" id="wipeConfirmBtn" disabled style="background:var(--red);color:#fff;opacity:.45;pointer-events:none;" onclick="confirmWipeShop('${esc(shopId)}','${esc(name).replace(/'/g,"\\'")}')">Yes, permanently clear ${esc(name)}</button>
+    <button class="btn btn-full-center" id="wipeConfirmBtn" disabled style="background:var(--red);color:#fff;opacity:.45;pointer-events:none;" data-action="confirmWipeShop" data-id="${esc(shopId)}" data-name="${esc(name)}">Yes, permanently clear ${esc(name)}</button>
     <button class="btn btn-outline btn-full-center" onclick="S.wipeShopId=null;navBack();">Cancel</button>
   </div>`;
 }

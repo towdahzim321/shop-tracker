@@ -213,6 +213,62 @@
   storage on load, would break this invariant and needs the same 
   audit redone before shipping.
 
+## Escaping contract (client rendering)
+- `esc()` (index.html:584) escapes exactly five characters: `& < > " '`. 
+  That set is sufficient for both HTML text content and HTML attribute 
+  values (including `data-*` attributes) - `esc(x)` inside any 
+  `attr="${esc(x)}"` or `>${esc(x)}<` position is safe.
+- It is NOT safe to interpolate free text into an `on*="..."` handler 
+  attribute, `esc()` or not. A closed security finding (stored XSS, fixed 
+  in the `data-action`/`DATA_CLICK_ACTIONS` rollout) was exactly this: the 
+  browser decodes character references in an attribute value *before* 
+  compiling that value as the handler's JS source, so `esc()` turning `'` 
+  into `&#39;` still hands JS a live `'` back, breaking out of the string 
+  literal. `.replace(/'/g,"\\'")` chained after `esc()` does not help 
+  either - `esc()` has already consumed every `'` by then, so the 
+  `.replace()` is dead code (which is exactly what the pre-fix sites had). 
+  There is no per-character escaping fix for this class - text must not 
+  reach handler-attribute JS source at all.
+- The fix, and the pattern for any new element whose click action needs 
+  free text (a name, a note, anything not a UUID/date/fixed enum): put the 
+  value in a `data-*` attribute (still `esc()`-wrapped, as ordinary 
+  attribute text) and give the element `data-action="someName"`. Add 
+  `someName` to the `DATA_CLICK_ACTIONS` table (index.html, right after 
+  the delegated listener) mapping to a function that reads `ds.id`/
+  `ds.name`/etc. Do not add a new `onclick="..."` attribute that 
+  interpolates anything beyond a UUID, ISO date, or a fixed internal 
+  constant (view name, enum member) - those are the only values proven 
+  incapable of carrying an attacker-controlled `'`.
+- One delegated `click` listener on `document` (index.html:1658-1681) 
+  reads `e.target.closest('[data-action]')` and dispatches through 
+  `DATA_CLICK_ACTIONS`. It is attached once, at top-level script scope, 
+  not inside `render()` - `render()` (and every other function that does 
+  `document.getElementById('app').innerHTML = ...`) rebuilds `#app`'s 
+  children on every call, which would kill any listener attached to a 
+  child directly. A listener on `document` (an ancestor that is never 
+  itself replaced) survives every rebuild for free, same reasoning as the 
+  pre-existing `.table-scroll` delegated `scroll` listener immediately 
+  above it in the file. Do not attach a new per-element listener inside a 
+  render function - it will not survive the next `render()`.
+- `topbar()` and `askConfirm()` (and `askAlert()`) escape their own 
+  arguments internally (`esc(title)`/`esc(sub)` in `topbar()`, `esc(msg)` 
+  in `askConfirm()`/`askAlert()`). Call sites must pass the raw value, not 
+  a pre-escaped one - `esc()` is not idempotent (`esc(esc(x))` corrupts 
+  `x`, e.g. turning a literal `&` into the visible text `&amp;amp;`), so 
+  pre-escaping at the call site double-escapes and shows garbled text 
+  instead of failing safe. This is why `closeShopAction(id, name)` and 
+  `deactivateStaff(id, name)` interpolate `name` directly into the string 
+  passed to `askConfirm()`, and why `screenRenameShop()`/`screenSetModelBrand()`/ 
+  `screenResetPin()` pass `target.name` straight into `topbar()` - both 
+  look unescaped at the call site by design, because the escaping happens 
+  one layer down, once.
+- Any new render helper that accepts text and puts it in the DOM must say 
+  in a one-line comment which of the two contracts it follows: escapes 
+  its own arguments internally (callers pass raw text), or expects 
+  already-escaped input (callers must call `esc()` themselves). Mixing the 
+  two silently is how both the original onclick bug and a double-escaping 
+  bug happen.
+
 ## Vendored dependencies (client)
 - `supabase-js.2.112.4.js` (repo root) is `@supabase/supabase-js@2.112.4`'s 
   published UMD browser bundle (the same file its own `package.json` 
