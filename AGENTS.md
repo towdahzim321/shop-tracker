@@ -159,17 +159,18 @@
 - `RENDER_PENDING` (client, index.html): records that a background render 
   (outbox bar, realtime `bump()`, `pollTick()`) was suppressed while 
   `CRITICAL_FLOW_IN_PROGRESS` was true, so the owning handler's `finally` 
-  can render once to catch up. On a graceful RPC failure, five screens - 
-  sell phone, client return, submit EOD, staff PIN entry, admin login - 
-  clear the flag without rendering instead: they patch only their own 
-  error element (`priceErr`/`returnErr`/`eodErr`/`pinErr`/`adminErr`), and 
-  a real render() right after would blank out that just-shown error under 
-  a flaky connection - worse than the render staying owed. This is safe 
-  only because none of those five screens display anything backed by live 
-  `SHOP_CACHE` data - if any of them starts showing SHOP_CACHE-derived 
-  content, this trade-off needs revisiting (either render there too, or 
-  patch in the fresher data alongside the error). Each call site carries a 
-  one-line comment noting this.
+  can render once to catch up. On a graceful RPC failure, six screens - 
+  sell phone, client return, submit EOD, staff PIN entry, admin login, 
+  clear shop data - clear the flag without rendering instead: they patch 
+  only their own error element (`priceErr`/`returnErr`/`eodErr`/`pinErr`/
+  `adminErr`/`wipeErr`), and a real render() right after would blank out 
+  that just-shown error under a flaky connection - worse than the render 
+  staying owed. This is safe only because none of those six screens 
+  display anything backed by live `SHOP_CACHE` data - if any of them 
+  starts showing SHOP_CACHE-derived content, this trade-off needs 
+  revisiting (either render there too, or patch in the fresher data 
+  alongside the error). Each call site carries a one-line comment noting 
+  this.
 
 ## Client state across navigation
 - `navTo()`/`go()` (index.html) replace `S` entirely on every navigation, 

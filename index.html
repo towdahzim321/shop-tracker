@@ -1902,7 +1902,7 @@ function renderMenuPanel(){
 // navigating, but this is the one place that actually renders a view, so it's
 // the backstop that stays correct even if a future call site forgets to
 // check, or S.view ends up here some other way (stale back-stack, etc).
-const OWNER_ONLY_VIEWS = ['ownerDash','ownerSettings','wipeShop','ownerManage','ownerPricing','ownerDayReport','ownerTransactions','ownerCashDetail','ownerFaulty','ownerSearch','ownerExpenses'];
+const OWNER_ONLY_VIEWS = ['ownerDash','ownerSettings','dangerZone','wipeShop','ownerManage','ownerPricing','ownerDayReport','ownerTransactions','ownerCashDetail','ownerFaulty','ownerSearch','ownerExpenses'];
 function viewFor(v){
   if(OWNER_ONLY_VIEWS.indexOf(v) !== -1 && !ADMIN_SESSION){
     return screenAdminLogin();
@@ -1927,6 +1927,7 @@ function viewFor(v){
     case 'adminLogin': return screenAdminLogin();
     case 'ownerDash': return screenOwnerDash();
     case 'ownerSettings': return screenOwnerSettings();
+    case 'dangerZone': return screenDangerZone();
     case 'wipeShop': return screenWipeShop();
     case 'ownerManage': return screenOwnerManage();
     case 'ownerPricing': return screenOwnerPricing();
@@ -4023,6 +4024,23 @@ async function loadAdminStaffList(shopId){
   return ADMIN_STAFF_CACHE[shopId];
 }
 let SHOP_RESET_CACHE = {};
+let RESET_INFO_LOADING = {};
+// Live pre-flight counts for the "clear all data" gate in screenWipeShop()
+// below - deliberately NOT derived from SHOP_CACHE, whose ledger array is
+// capped at the .limit(5000) on refreshShopData's ledger query (~line 1397)
+// and would be silently wrong on exactly the long-history shop most worth
+// protecting. WIPE_COUNTS lives on a top-level let, not S, per AGENTS.md
+// "Client state across navigation" - this flow spans the danger-zone list,
+// the wipe screen and a modal.
+let WIPE_COUNTS = null;          // {shopId, ok, counts|error, at}
+let WIPE_COUNTS_LOADING = false; // false when idle, else the shopId currently being fetched
+let WIPE_COUNTS_SEQ = 0;         // generation token - a stale response is dropped
+const WIPE_COUNT_TABLES = [
+  {table:'phones',        label:'Phones (in stock, sold, faulty)'},
+  {table:'ledger',        label:'Ledger entries (sales, returns, receipts)'},
+  {table:'daily_logs',    label:'End-of-day logs'},
+  {table:'business_days', label:'Business days'}
+];
 async function loadShopResetInfo(shopId){
   if(!sb) return null;
   try{
@@ -4035,6 +4053,94 @@ async function loadShopResetInfo(shopId){
   }
   return SHOP_RESET_CACHE[shopId];
 }
+// Shared by screenOwnerSettings and screenDangerZone. Guarded on S.view so a
+// promise resolving after the admin has already navigated into the
+// type-to-confirm screen doesn't render() there and wipe out what they typed.
+function ensureShopResetInfo(shopId){
+  if(SHOP_RESET_CACHE[shopId]!==undefined || RESET_INFO_LOADING[shopId]) return;
+  RESET_INFO_LOADING[shopId] = true;
+  loadShopResetInfo(shopId).then(()=>{
+    RESET_INFO_LOADING[shopId] = false;
+    if(S.view==='ownerSettings' || S.view==='dangerZone') render();
+  });
+}
+// Fetches live row counts for the four tables admin_wipe_shop_data deletes
+// (supabase-schema-part4.sql) - fresh every call, never cached, so the
+// wipe screen always shows what would be destroyed right now, not a stale
+// figure from whenever this dialog was last opened. A count that fails to
+// load (offline, RLS, timeout) resolves ok:false - applyWipeLock() below
+// keeps the confirm button locked in that case rather than letting the
+// admin proceed blind.
+async function fetchWipeCounts(shopId){
+  if(!sb) return {shopId, ok:false, error:"Not connected to the shared database, so the app can't check what would be deleted."};
+  try{
+    const results = await Promise.race([
+      Promise.all(WIPE_COUNT_TABLES.map(t =>
+        sb.from(t.table).select('*', {count:'exact', head:true}).eq('shop_id', shopId)
+      )),
+      new Promise(resolve => setTimeout(() => resolve(null), RPC_TIMEOUT_MS))
+    ]);
+    if(!results) throw new Error('timed out');
+    const counts = {};
+    results.forEach((r,i)=>{
+      if(r.error) throw r.error;
+      // Guards against a backend/mock that answers but omits a real count -
+      // treated as a failure (locked button), never as "0 rows".
+      if(typeof r.count !== 'number') throw new Error('count unavailable');
+      counts[WIPE_COUNT_TABLES[i].table] = r.count;
+    });
+    SB_UNREACHABLE = false;
+    return {shopId, ok:true, counts, at:Date.now()};
+  }catch(e){
+    // Deliberately does NOT set SB_UNREACHABLE - a permission error here
+    // isn't the same claim as "the shared database is unreachable" for the
+    // whole app, and this screen's own error box already says enough.
+    return {shopId, ok:false, error:"Could not read the current record counts for this shop. The clear button stays locked until the app can confirm exactly what would be deleted."};
+  }
+}
+function wipeCountsHtml(){
+  const shopId = S.wipeShopId;
+  if(WIPE_COUNTS_LOADING===shopId || !WIPE_COUNTS || WIPE_COUNTS.shopId!==shopId){
+    return '<p class="lead">Checking exactly what would be deleted&hellip;</p>';
+  }
+  if(!WIPE_COUNTS.ok){
+    return `<div class="err">${esc(WIPE_COUNTS.error)}</div>
+      <button class="btn btn-outline btn-full-center" onclick="retryWipeCounts()">Try again</button>`;
+  }
+  const c = WIPE_COUNTS.counts;
+  const total = WIPE_COUNT_TABLES.reduce((s,t)=>s+c[t.table],0);
+  return `<div class="card" style="border-color:var(--red);">
+    <div style="font-size:13px;color:var(--text-soft);margin-bottom:8px;">About to permanently delete, right now:</div>
+    ${WIPE_COUNT_TABLES.map(t=>`<div style="display:flex;justify-content:space-between;font-size:14px;padding:3px 0;"><span>${esc(t.label)}</span><strong>${c[t.table]}</strong></div>`).join('')}
+    ${total===0 ? '<div style="margin-top:8px;color:var(--text-faint);font-size:12.5px;">This shop already has no records.</div>' : ''}
+    <div style="margin-top:8px;font-size:11.5px;color:var(--text-faint);">Counted just now &mdash; not a cached copy.</div>
+  </div>`;
+}
+function paintWipeCounts(){
+  const el = document.getElementById('wipeCountsBox');
+  if(el) el.innerHTML = wipeCountsHtml();
+}
+function ensureWipeCounts(shopId){
+  // A different shopId always supersedes an in-flight fetch (dropped below
+  // via the seq check) rather than being swallowed by the loading guard -
+  // otherwise opening a second shop's wipe screen mid-fetch left the first
+  // shop's result permanently on screen with no retry path.
+  if(WIPE_COUNTS_LOADING === shopId) return;
+  WIPE_COUNTS_LOADING = shopId;
+  const seq = ++WIPE_COUNTS_SEQ;
+  fetchWipeCounts(shopId).then(r=>{
+    if(seq !== WIPE_COUNTS_SEQ) return; // a newer request already won
+    WIPE_COUNTS_LOADING = false;
+    WIPE_COUNTS = r;
+    paintWipeCounts();
+    applyWipeLock();
+  });
+}
+function retryWipeCounts(){
+  WIPE_COUNTS = null;
+  paintWipeCounts();
+  ensureWipeCounts(S.wipeShopId);
+}
 function screenOwnerSettings(){
   if(S.resetPinStaff) return screenResetPin();
   if(S.renameShopTarget) return screenRenameShop();
@@ -4046,12 +4152,8 @@ function screenOwnerSettings(){
     S.settingsLoading = true;
     loadAdminStaffList(shopId).then(()=>{ S.settingsLoading = false; render(); });
   }
-  if(SHOP_RESET_CACHE[shopId]===undefined && !S.resetInfoLoading){
-    S.resetInfoLoading = true;
-    loadShopResetInfo(shopId).then(()=>{ S.resetInfoLoading = false; render(); });
-  }
+  SHOPS.forEach(s=>ensureShopResetInfo(s.id));
   const list = ADMIN_STAFF_CACHE[shopId];
-  const lastReset = SHOP_RESET_CACHE[shopId];
   setTimeout(()=>attachSearchFilter('modelMgmtSearch','modelMgmtList'),0);
   return `
   ${topbar('Settings', 'Shops, staff logins and alerts', true)}
@@ -4127,9 +4229,12 @@ function screenOwnerSettings(){
 
     <h2 style="color:var(--red);">Danger zone</h2>
     <div class="card" style="border-color:var(--red);">
-      <div style="font-size:13px;color:var(--text-soft);margin-bottom:10px;">Permanently clear all stock, sales, faulty-shelf and end-of-day records for ${esc(shopName(shopId))}. Use this to remove test/demo entries before a client sees the app, or any time you want a clean slate for this shop. Staff logins and the other shops are not touched.</div>
-      ${lastReset ? `<div style="font-size:12px;color:var(--text-faint);margin-bottom:10px;">Last cleared: ${esc(fmtDateTime(lastReset.wiped_at))} by ${esc(lastReset.wiped_by)}</div>` : ''}
-      <button class="btn btn-full-center" style="background:var(--red);color:#fff;" onclick="navTo('wipeShop',{wipeShopId:'${shopId}'})">Clear all data for this shop</button>
+      <div style="font-size:13px;color:var(--text-soft);margin-bottom:10px;">Permanently clearing a shop's stock, sales, faulty-shelf and end-of-day history now lives on its own screen, so it can't be tapped by accident from here and no longer follows the Staff tab above.</div>
+      ${SHOPS.map(s=>{
+        const r = SHOP_RESET_CACHE[s.id];
+        return `<div style="font-size:12px;color:var(--text-faint);margin-bottom:4px;">Last cleared: ${esc(s.name)} &mdash; ${r ? esc(fmtDateTime(r.wiped_at))+' by '+esc(r.wiped_by) : 'never'}</div>`;
+      }).join('')}
+      <button class="btn btn-outline btn-full-center" style="color:var(--red);border-color:var(--red);margin-top:6px;" onclick="navTo('dangerZone')">Open danger zone</button>
     </div>
 
     <div style="margin-top:24px;text-align:center;">
@@ -4141,49 +4246,133 @@ function fmtDateTime(iso){
   const d = new Date(iso);
   return d.toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 }
+// A dedicated, visually distinct area separate from routine admin nav
+// (Settings' Staff/Models/Stock alerts) - reached only via the plain
+// "Open danger zone" link at the bottom of Settings, never from the
+// slide-over menu. Each shop's own button names that shop explicitly, so
+// the delete target is never inherited from an unrelated tab selection.
+function screenDangerZone(){
+  SHOPS.forEach(s=>ensureShopResetInfo(s.id));
+  return `
+  ${topbar('Danger zone', 'Permanent deletion — no undo', true)}
+  <div class="content">
+    <div class="alert-banner">Everything on this screen permanently deletes real trading records for a whole shop. There is no undo and no backup.</div>
+    <p class="lead">Pick the shop you mean. The shop's name is written on its own button below &mdash; nothing here follows a tab or a previous selection.</p>
+    ${SHOPS.map(s=>{
+      const r = SHOP_RESET_CACHE[s.id];
+      return `<div class="card" style="border-color:var(--red);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div class="model">${esc(s.name)}</div>
+          ${s.active===false ? '<span class="chip chip-gray">Closed</span>' : '<span class="chip chip-green">Open</span>'}
+        </div>
+        <div style="font-size:12px;color:var(--text-faint);margin-bottom:10px;">${r ? 'Last cleared: '+esc(fmtDateTime(r.wiped_at))+' by '+esc(r.wiped_by) : 'Never cleared'}</div>
+        <button class="btn btn-full-center" style="background:var(--red);color:#fff;" onclick="navTo('wipeShop',{wipeShopId:'${esc(s.id)}'})">Clear all data for ${esc(s.name)}</button>
+      </div>`;
+    }).join('')}
+    <button class="btn btn-outline btn-full-center" onclick="navBack()">Back to settings</button>
+  </div>`;
+}
 function screenWipeShop(){
   const shopId = S.wipeShopId;
+  // A stale back-stack entry (or a direct navTo with no wipeShopId) would
+  // otherwise make shopName(undefined) === undefined, turning the exact-name
+  // gate into "type the literal string undefined".
+  if(!shopId || !SHOPS.some(s=>s.id===shopId)) return screenDangerZone();
   const name = shopName(shopId);
-  setTimeout(()=>attachWipeConfirmWatcher(name),0);
+  setTimeout(()=>{ attachWipeConfirmWatcher(); ensureWipeCounts(shopId); },0);
   return `
   ${topbar('Clear shop data', name, true)}
   <div class="content">
     <div class="alert-banner">This permanently deletes ALL stock, sales, faulty-shelf and end-of-day history for ${esc(name)}. This cannot be undone.</div>
-    <p class="lead">Staff logins and the other shops are not affected.</p>
+    <div id="wipeCountsBox">${wipeCountsHtml()}</div>
+    <p class="lead">Staff logins, expense records and the other shops are not affected.</p>
     <div class="field">
       <label>Type the shop name exactly to unlock the button: <strong>${esc(name)}</strong></label>
-      <input type="text" id="wipeConfirmInput" placeholder="${esc(name)}" autocomplete="off" autocapitalize="off">
+      <div style="font-size:12px;color:var(--text-faint);margin-bottom:7px;">Must match exactly, including capital letters and spaces.</div>
+      <input type="text" id="wipeConfirmInput" placeholder="${esc(name)}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     </div>
+    <div id="wipeLockState" style="font-size:12.5px;color:var(--text-faint);margin-bottom:10px;">Locked &mdash; waiting for the live record count.</div>
     <div id="wipeErr"></div>
-    <button class="btn btn-full-center" id="wipeConfirmBtn" style="background:var(--red);color:#fff;opacity:.45;pointer-events:none;" onclick="confirmWipeShop('${esc(shopId)}','${esc(name).replace(/'/g,"\\'")}')">Yes, permanently clear ${esc(name)}</button>
+    <button class="btn btn-full-center" id="wipeConfirmBtn" disabled style="background:var(--red);color:#fff;opacity:.45;pointer-events:none;" onclick="confirmWipeShop('${esc(shopId)}','${esc(name).replace(/'/g,"\\'")}')">Yes, permanently clear ${esc(name)}</button>
     <button class="btn btn-outline btn-full-center" onclick="S.wipeShopId=null;navBack();">Cancel</button>
   </div>`;
 }
-function attachWipeConfirmWatcher(name){
+// Reads shopName(S.wipeShopId) fresh rather than a captured string, so a
+// shop renamed mid-flow re-gates correctly instead of accepting a stale name.
+function wipeNameMatches(){
   const input = document.getElementById('wipeConfirmInput');
+  // Exact match only: no .trim(), no case folding - a real typo (including
+  // trailing whitespace) must not unlock this button.
+  return !!input && input.value === shopName(S.wipeShopId);
+}
+function applyWipeLock(){
   const btn = document.getElementById('wipeConfirmBtn');
-  if(!input || !btn) return;
-  input.addEventListener('input', ()=>{
-    const match = input.value.trim() === name;
-    btn.style.opacity = match ? '1' : '.45';
-    btn.style.pointerEvents = match ? 'auto' : 'none';
-  });
+  if(!btn) return;
+  const countsReady = !!(WIPE_COUNTS && WIPE_COUNTS.ok && WIPE_COUNTS.shopId === S.wipeShopId);
+  const open = countsReady && wipeNameMatches();
+  btn.style.opacity = open ? '1' : '.45';
+  btn.style.pointerEvents = open ? 'auto' : 'none';
+  btn.disabled = !open;
+  const st = document.getElementById('wipeLockState');
+  if(st) st.textContent = !countsReady
+    ? 'Locked — waiting for the live record count.'
+    : (open ? 'Unlocked.' : 'Locked — the name does not match yet.');
+}
+function attachWipeConfirmWatcher(){
+  const input = document.getElementById('wipeConfirmInput');
+  if(!input) return;
+  input.addEventListener('input', applyWipeLock);
+  applyWipeLock();
 }
 async function confirmWipeShop(shopId, name){
   const input = document.getElementById('wipeConfirmInput');
-  if(!input || input.value.trim() !== name) return;
-  if(!await askConfirm('Really clear ALL data for '+name+'? There is no undo.', 'Yes, clear it permanently')) return;
-  const res = await callRpc('admin_wipe_shop_data', {p_shop_id: shopId});
-  if(!res.ok){
-    const el = document.getElementById('wipeErr');
-    if(el) el.innerHTML = '<div class="err">'+esc(res.error)+'</div>';
-    return;
+  const live = shopName(shopId);
+  if(!input || input.value !== live || live !== name) return;
+  const label = lockBtnSaving('wipeConfirmBtn', 'Checking…');
+  CRITICAL_FLOW_IN_PROGRESS = true;
+  try{
+    // The counts behind this confirmation are read at the moment the admin
+    // commits, not reused from whatever has been sitting on screen - re-fetch
+    // fresh rather than trusting a figure that could be minutes old.
+    const fresh = await fetchWipeCounts(shopId);
+    WIPE_COUNTS = fresh;
+    paintWipeCounts();
+    if(!fresh.ok){
+      unlockBtn('wipeConfirmBtn', label);
+      applyWipeLock();
+      RENDER_PENDING = false; // see AGENTS.md's RENDER_PENDING trade-off note
+      document.getElementById('wipeErr').innerHTML = '<div class="err">'+esc(fresh.error)+'</div>';
+      return;
+    }
+    const c = fresh.counts;
+    const msg = 'Permanently delete '+name+': '+c.phones+' phone(s), '+c.ledger+' ledger entr'+(c.ledger===1?'y':'ies')
+      +', '+c.daily_logs+' day log(s), '+c.business_days+' business day(s). There is no undo.';
+    if(!await askConfirm(msg, 'Yes, clear it permanently')){
+      unlockBtn('wipeConfirmBtn', label);
+      applyWipeLock();
+      RENDER_PENDING = false;
+      return;
+    }
+    lockBtnSaving('wipeConfirmBtn', 'Clearing…');
+    const res = await callRpc('admin_wipe_shop_data', {p_shop_id: shopId});
+    if(!res.ok){
+      unlockBtn('wipeConfirmBtn', label);
+      applyWipeLock();
+      RENDER_PENDING = false;
+      document.getElementById('wipeErr').innerHTML = '<div class="err">'+esc(res.error)+'</div>';
+      return;
+    }
+    delete SHOP_RESET_CACHE[shopId];
+    WIPE_COUNTS = null;
+    await refreshShopData(shopId);
+    const d = res.data || {};
+    await askAlert(name+' cleared: '+(d.phones||0)+' phone(s), '+(d.ledger||0)+' ledger entr'+((d.ledger||0)===1?'y':'ies')
+      +', '+(d.dailyLogs||0)+' day log(s), '+(d.businessDays||0)+' business day(s) removed.');
+    go('ownerSettings', {settingsShop: shopId});
+  } finally {
+    CRITICAL_FLOW_IN_PROGRESS = false;
+    if(RENDER_PENDING){ RENDER_PENDING = false; render(); }
   }
-  delete SHOP_RESET_CACHE[shopId];
-  await refreshShopData(shopId);
-  const c = res.data || {};
-  await askAlert(name+' cleared: '+(c.phones||0)+' phone(s), '+(c.dailyLogs||0)+' day log(s), '+(c.businessDays||0)+' business day(s) removed.');
-  go('ownerSettings', {settingsShop: shopId});
 }
 function screenResetPin(){
   const target = S.resetPinStaff;
